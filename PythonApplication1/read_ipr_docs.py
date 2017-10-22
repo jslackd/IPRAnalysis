@@ -25,7 +25,7 @@ import re
 
 in_dir = "in_data"
 #fold = "all_iprs"
-fold = "test_docs2"
+fold = "test_docs"
 out_file = "ipr_read_data.xlsx"
 
 res = 400
@@ -37,12 +37,12 @@ ipr_data = collections.OrderedDict()
 #       "trial_num(s)"  : ["IPR2015-00010"] or ["CBM2015-00004"] or ["PGR2015-00003"] or []
 #       "trial_type"    : "IPR" or "CBM" or "PGR" or "Mult." or None
 #       "fd_type(s)"    : ["final written decision"] or ["judgment"] or ["termination of proceeding"] or ["unknown"] or []
-#       "mult_pat"      : True or False
 #       "dec_date"      : "12/16/2015" or None
 #       "pet_name(s)"   : ["BIO-RAD LABORATORIES, INC.,"] or ["unknown"] or []
 #       "ph_name(s)"    : ["CALIFORNIA INSTITUTE OF TECHNOLOGY"] or ["unknown"] or []
 #       "pat_num(s)"    : ["6658464"] or ["43919"] or ["unknown"] or []
 #       "pat_type(s)"   : ["B2"] or ["RE"] or ["unknown"] or []
+#       "mult_pat"      : True or False
 #       "order_txt"     : "ORDERED that the joint motion to terminate the proceeding is GRANTED and . . ."
 #       "order_disp(s)" : [["6658464", "unpatentable", [1,2,3,4,5,6,7,8,9,14]], [ ] ]  or []
 #       "no_issues"     : False or True
@@ -55,7 +55,84 @@ def create_dictionary_entry(fname):
     }
 
 def read_desc_date(procstr):
-    pass
+    # This function will find the decision date for the final decision
+    # If it fails, it will return None, False (False being for issue flag)
+    
+    # Start by finding outer bound based on "UNITED STATES" or "PATENT" or "before" or "patent"
+    ender = None
+    if procstr.find("UNITED STATES") != -1:
+        pos1 = procstr.find("UNITED STATES") - 1
+        if procstr[pos1] != "\n" and procstr[pos1] != " ": pos1 += 1
+        ender = pos1
+    elif procstr.find("PATENT") != -1:
+        pos1 = procstr.find("PATENT") - 1
+        if procstr[pos1] != "\n" and procstr[pos1] != " ": pos1 += 1
+        ender = pos1
+    elif procstr.lower().find("before") != -1:
+        pos1 = procstr.lower().find("before") - 1
+        if procstr[pos1] != "\n" and procstr[pos1] != " ": pos1 += 1
+        ender = pos1
+    elif procstr.lower().find("patent") != -1:
+        pos1 = procstr.lower().find("patent") - 1
+        if procstr[pos1] != "\n" and procstr[pos1] != " ": pos1 += 1
+        ender = pos1
+    # If we haven't set ender, choose the first half of the page
+    if ender == None: ender = int(len(procstr)/2)
+
+    # Starter is either <month> or the first "\n" character
+    starter = None; mcheck = False
+    months = ["January","February","March","April","May","June","July","August","September","October","November","December"]
+    for month in months:
+        if procstr.find(month,0,ender) != -1:
+            mcheck = month
+            break
+
+    if mcheck != False:
+        pos0 = procstr.find(mcheck,0,ender)
+        starter = pos0
+    elif procstr.find("\n",0,ender) != -1:
+        pos0 = procstr.find("\n",0,ender)
+        starter = pos0
+    else:
+        starter = 0    
+
+    # Snip the string to only contain the date
+    snip = procstr[starter:ender]
+    # If we found a month, this will be easy
+    if mcheck != False:
+        if snip[0] == " ": snip = snip[1:] # removes extra space
+        cut = snip.find("\n")
+        snip = snip[0:cut].replace(" ","")
+    # Otherwise, we need to manually search for date format
+    else:
+        splits = snip.split()
+        year = None; month = None; day = None
+        for i in range(2,len(splits)):
+            pos_year = splits[i]; pos_day = splits[i-1].replace(",",""); pos_month = splits[i-2]
+            if pos_year.isdigit() == True and pos_day.isdigit() == True and pos_month.isdigit() == False:
+                year = pos_year; 
+                day = pos_day; 
+                month = pos_month
+
+        if year == None or day == None or month == None:
+            return None, False
+        else:
+            snip = month + day + "," + year
+
+    # Cleanup snip for date processing
+    if snip[0] == " " or snip[0] == "\n":
+        snip = snip[1:]
+    if snip[-1:] == " " or snip[-1:] == "\n":
+        snip = snip[0:-1]
+
+    # Pull date from targeted string
+    try:
+        ddate = datetime.strptime(snip, "%B%d,%Y")
+        ddate = ddate.strftime("%m/%d/%Y")
+    except ValueError:
+        return snip, False
+
+    return ddate, True
 
 def read_petitioner_names(procstr):
     # This function will find the petitioner names on the first page of an IPR
@@ -301,7 +378,7 @@ def read_pholder_names(procstr_full, start_pos):
             ph = "J" + ph[2:]
             pholders_new[cnt] = ph
         cnt += 1
-    return pholders_new, True, ender + start_pos
+    return pholders_new, True, (ender + start_pos)
 
 def read_trial_nums(procstr_full, start_pos, target):
     #print(procstr_full[start_pos+1:].replace(" ",""))
@@ -346,9 +423,6 @@ def read_trial_nums(procstr_full, start_pos, target):
         if len(found) != 0:
             trial_nums.extend(found)
 
-    if len(trial_nums) == 0:
-        print("NO CASE TRIAL NUMBERS")
-
     # Find any trial number occuring near the end of the document (no bounds)
     if f_end != (len(procstr) - 1):
         extra_str = procstr[f_end:]
@@ -377,6 +451,31 @@ def read_trial_nums(procstr_full, start_pos, target):
         error_flag = False
 
     return trial_nums, error_flag
+
+def decide_trial_type(trials):
+    # No data to go off of; return None for type type
+    if len(trials) == 0:
+        return None, False
+
+    error_flag = True
+    ttype = None
+    for trial in trials:
+        if trial.find("IPR") != -1:
+            if ttype == None: ttype = "IPR"
+            elif ttype == "IPR": pass
+            else: ttype = "Mult."
+        elif trial.find("CBM") != -1:
+            if ttype == None: ttype = "CBM"
+            elif ttype == "CBM": pass
+            else: ttype = "Mult."
+        elif trial.find("PGR") != -1:
+            if ttype == None: ttype = "PGR"
+            elif ttype == "PGR": pass
+            else: ttype = "Mult."
+        else:
+            error_flag = False
+
+    return ttype, error_flag
 
 def read_pat_nums(procstr_full, start_pos):
     pass
@@ -435,14 +534,18 @@ def main():
         tessdata_dir_config = '--tessdata-dir "C:\\Program Files (x86)\\Tesseract-OCR\\tessdata" -oem 2 -psm 11'
         text_read = pytesseract.image_to_string(imagein, boxes = False, config=tessdata_dir_config)
 
-        # Pull decision date from the first page
         procstr = text_read
+        ## Pull decision date from the first page
         ddate, error_free = read_desc_date(procstr)
+        ipr_data[target]["dec_date"] = ddate
+        ipr_data[target]["no_issues"] = bool(ipr_data[target]["no_issues"] * error_free)        
 
+        #print(target)
+        #print(ddate)
+        #print(error_free)
+        #print("")
         
-
         # Pull petitioner names from the first page
-
         petitioners, error_free, ph_start = read_petitioner_names(procstr)
         ipr_data[target]["pet_name(s)"].extend(petitioners)
         ipr_data[target]["no_issues"] = bool(ipr_data[target]["no_issues"] * error_free)
@@ -474,9 +577,20 @@ def main():
         #    print("")
 
         # Figure out trial type based on list of trial numbers
-        
+        trial_type, error_free = decide_trial_type(trial_nums)
+        ipr_data[target]["trial_type"] = trial_type
+        ipr_data[target]["no_issues"] = bool(ipr_data[target]["no_issues"] * error_free)    
             
+        #print(target)
+        #print(trial_type)
+        #print(error_free)
+        #print("")
 
+        # Pull patent numbers from the first page
+
+        # "pat_num(s)"    : ["6658464"] or ["43919"] or ["unknown"] or []
+        # "pat_type(s)"   : ["B2"] or ["RE"] or ["unknown"] or []
+        # "mult_pat"      : True or False
 
 
 
