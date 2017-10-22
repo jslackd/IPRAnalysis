@@ -35,7 +35,7 @@ ipr_data = collections.OrderedDict()
 # Format: {filename.pdf (str): {attrib (str): val (---)}}
 # Attributes:
 #       "trial_num(s)"  : ["IPR2015-00010"] or ["CBM2015-00004"] or ["PGR2015-00003"] or []
-#       "trial_type"    : "IPR" or "CBM" or "PGR" or None
+#       "trial_type"    : "IPR" or "CBM" or "PGR" or "Mult." or None
 #       "fd_type(s)"    : ["final written decision"] or ["judgment"] or ["termination of proceeding"] or ["unknown"] or []
 #       "mult_pat"      : True or False
 #       "dec_date"      : "12/16/2015" or None
@@ -193,7 +193,7 @@ def read_pholder_names(procstr_full, start_pos):
 
     # If we have not reset ender, we have failed
     if ender is None:
-        return [], False
+        return [], False, 0
 
     # Find the first instance of "v." or "V." or "v" + occuring after start_pos!=0
     if procstr.find("v.",0,ender) != -1:
@@ -211,7 +211,7 @@ def read_pholder_names(procstr_full, start_pos):
 
     # If we have not reset starter, we have failed
     if starter is None:
-        return [], False
+        return [], False, 0
 
     # Cut snippet of text from "v." to "Patent Owner" 
     snip = procstr[starter:ender].replace("\n", " ")
@@ -298,7 +298,82 @@ def read_pholder_names(procstr_full, start_pos):
             ph = "J" + ph[2:]
             pholders_new[cnt] = ph
         cnt += 1
-    return pholders_new, True
+    return pholders_new, True, ender + start_pos
+
+def read_trial_nums(procstr_full, start_pos, target):
+    #print(procstr_full[start_pos+1:].replace(" ",""))
+
+    procstr = procstr_full[start_pos+1:].replace(" ","")
+    error_flag = True
+    # Find farthest outer bound based on "before" or "judge"
+    if procstr.lower().find("before") != -1:
+        f_end = procstr.lower().find("before")
+    elif procstr.lower().find("judge") != -1:
+        f_end = procstr.lower().find("judge")
+    else:
+        f_end = len(procstr) - 1
+
+    # Find bounds for case number(s) and add save bounded snips
+    snips = []
+    formater = re.compile("[A-Z][A-Z][A-Z][0-9][0-9][0-9][0-9].[0-9][0-9][0-9][0-9][0-9]")
+    pos0 = 0; pos1 = f_end
+    while pos0 != -1 and pos0 < (len(procstr)-1):
+        pos0 = procstr.lower().find("case",pos0,pos1)
+
+        if pos0 != -1:
+            pos1 = procstr.lower().find("patent",pos0,pos1)
+
+            # WE have found proper bounds; add to snip list
+            if pos1 != -1:
+                snips.append(procstr[pos0+4:pos1])
+                pos0 = pos1 + 1
+                pos1 = f_end
+            else:
+                break
+       
+    ## No snips were found; we failed
+    #if len(snips) == 0:
+    #    return [], False
+
+    # Pull case numbers from the compiled list
+    # Also, compare to the existing entry (if it exists)
+    trial_nums = []
+    for snip in snips:
+        found = re.findall(formater,snip)
+        if len(found) != 0:
+            trial_nums.extend(found)
+
+    if len(trial_nums) == 0:
+        print("NO CASE TRIAL NUMBERS")
+
+    # Find any trial number occuring near the end of the document (no bounds)
+    if f_end != (len(procstr) - 1):
+        extra_str = procstr[f_end:]
+        extra_found = re.findall(formater, extra_str)
+        trial_nums.extend(extra_found)
+
+    # Replace all "—" with "-" in the trial_nums we have found
+    cnt = 0
+    for trial_num in trial_nums:
+        trial_num = trial_num.replace("—","-")
+        trial_nums[cnt] = trial_num
+        cnt += 1
+
+    # Compare the preliminary trial number to what we have found thus far
+    to_compare = ipr_data[target]["trial_num(s)"]
+    if len(to_compare) != 0 and len(trial_nums) != 0:
+        for comp in to_compare:
+            if comp.lower() not in [tn.lower() for tn in trial_nums]:
+                error_flag = False
+                trial_nums.append(comp)
+    elif len(to_compare) != 0 and len(trial_nums) == 0:
+        error_flag = False
+        for comp in to_compare:
+            trial_nums.append(comp)
+    elif len(to_compare) == 0 and len(trial_nums) == 0:
+        error_flag = False
+
+    return trial_nums, error_flag
 
 def main():
     # Step 1: compile list of ipr documents to analyze
@@ -320,8 +395,8 @@ def main():
             switch = True
 
         if switch == True:
-            trial_hold = file_ident[3:13]
-            if trial_hold[0:4].isdigit() == True and trial_hold[4] == '-' and trial_hold[5::].isdigit() == True:
+            trial_hold = file_ident[0:13]
+            if trial_hold[3:7].isdigit() == True and trial_hold[7] == '-' and trial_hold[8::].isdigit() == True:
                 ipr_data[file]["trial_num(s)"].append(trial_hold)
 
         # Preliminiarily set "fd_type(s)" based on the filename
@@ -361,26 +436,34 @@ def main():
         ipr_data[target]["no_issues"] = bool(ipr_data[target]["no_issues"] * error_free)
 
         # Pull patent holder names from the first page
-        pholders, error_free = read_pholder_names(procstr, ph_start)
+        pholders, error_free, trialnum_start = read_pholder_names(procstr, ph_start)
         ipr_data[target]["ph_name(s)"].extend(pholders)
         ipr_data[target]["no_issues"] = bool(ipr_data[target]["no_issues"] * error_free)
-        
-    
-        print(target)
-        print("----Petitioners----")
-        for pet in petitioners:
-            print(pet)
-        print("----Patent Holders----")
-        for ph in pholders:
-            print(ph)
-        print("\n\n")
-            
-        
 
         #print(target)
-        #print(text_read)
-        #print("")
-        breakinghere = 1
+        #print("----Petitioners----")
+        #for pet in petitioners:
+        #    print(pet)
+        #print("----Patent Holders----")
+        #for ph in pholders:
+        #    print(ph)
+        #print("\n\n")
+        
+        # Pull trial number from the first page
+        trial_nums, error_free = read_trial_nums(procstr, trialnum_start, target)
+
+        if error_free == False:
+            print(target)
+            print(procstr)
+            print(trial_nums)
+            print(error_free)
+            print("")
+
+        # Figure out trial type
+            
+
+
+
 
 
 if __name__ == "__main__":
