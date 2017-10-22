@@ -54,6 +54,9 @@ def create_dictionary_entry(fname):
         "pat_type(s)": [], "order_txt": None, "order_disp(s)": [], "no_issues": True
     }
 
+def read_desc_date(procstr):
+    pass
+
 def read_petitioner_names(procstr):
     # This function will find the petitioner names on the first page of an IPR
     # If it fails, it will return [], False (False being for issue flag)
@@ -375,6 +378,9 @@ def read_trial_nums(procstr_full, start_pos, target):
 
     return trial_nums, error_flag
 
+def read_pat_nums(procstr_full, start_pos):
+    pass
+
 def main():
     # Step 1: compile list of ipr documents to analyze
     subpath = os.path.join(in_dir,fold)
@@ -429,8 +435,14 @@ def main():
         tessdata_dir_config = '--tessdata-dir "C:\\Program Files (x86)\\Tesseract-OCR\\tessdata" -oem 2 -psm 11'
         text_read = pytesseract.image_to_string(imagein, boxes = False, config=tessdata_dir_config)
 
-        # Pull petitioner names from the first page
+        # Pull decision date from the first page
         procstr = text_read
+        ddate, error_free = read_desc_date(procstr)
+
+        
+
+        # Pull petitioner names from the first page
+
         petitioners, error_free, ph_start = read_petitioner_names(procstr)
         ipr_data[target]["pet_name(s)"].extend(petitioners)
         ipr_data[target]["no_issues"] = bool(ipr_data[target]["no_issues"] * error_free)
@@ -451,15 +463,18 @@ def main():
         
         # Pull trial number from the first page
         trial_nums, error_free = read_trial_nums(procstr, trialnum_start, target)
+        ipr_data[target]["trial_num(s)"] = trial_nums
+        ipr_data[target]["no_issues"] = bool(ipr_data[target]["no_issues"] * error_free)
 
-        if error_free == False:
-            print(target)
-            print(procstr)
-            print(trial_nums)
-            print(error_free)
-            print("")
+        #if error_free == False:
+        #    print(target)
+        #    print(procstr)
+        #    print(trial_nums)
+        #    print(error_free)
+        #    print("")
 
-        # Figure out trial type
+        # Figure out trial type based on list of trial numbers
+        
             
 
 
