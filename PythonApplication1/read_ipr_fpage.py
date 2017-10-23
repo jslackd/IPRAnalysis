@@ -1,4 +1,4 @@
-"""Reading IPR pdf files"""
+"""Reading IPR pdf files first page"""
 # Jonathan Slack
 # jslackd@gmail.com
 
@@ -36,11 +36,12 @@ ipr_data = collections.OrderedDict()
 # Attributes:
 #       "trial_num(s)"  : ["IPR2015-00010"] or ["CBM2015-00004"] or ["PGR2015-00003"] or []
 #       "trial_type"    : "IPR" or "CBM" or "PGR" or "Mult." or None
-#       "fd_type(s)"    : ["final written decision"] or ["judgment"] or ["termination of proceeding"] or ["unknown"] or []
+#       "fd_type(s)"    : "FINAL WRITTEN DECISION" or "DECISION Termination of Trial" or None
+#       "FWD?"          : True or False
 #       "dec_date"      : "12/16/2015" or None
 #       "pet_name(s)"   : ["BIO-RAD LABORATORIES, INC.,"] or ["unknown"] or []
 #       "ph_name(s)"    : ["CALIFORNIA INSTITUTE OF TECHNOLOGY"] or ["unknown"] or []
-#       "pat_num(s)"    : ["6658464"] or ["677,234"] or ["43919"] or ["unknown"] or []
+#       "pat_num(s)"    : ["6658464"] or ["677234"] or ["43919"] or ["unknown"] or []
 #       "pat_type(s)"   : ["PAT-B2"] or ["RE--E"] or ["D---"] or ["unknown"] or []
 #       "mult_pat"      : True or False
 #       "order_txt"     : "ORDERED that the joint motion to terminate the proceeding is GRANTED and . . ."
@@ -49,9 +50,9 @@ ipr_data = collections.OrderedDict()
 
 def create_dictionary_entry(fname):
     ipr_data[fname] = {
-        "trial_num(s)": [], "trial_type": None, "fd_type(s)": [], "mult_pat": False,
+        "trial_num(s)": [], "trial_type": None, "fd_type(s)": None, "mult_pat": False,
         "dec_date": None, "pet_name(s)": [], "ph_name(s)": [], "pat_num(s)": None,
-        "pat_type(s)": [], "order_txt": None, "order_disp(s)": [], "no_issues": True
+        "pat_type(s)": [], "order_txt": None, "order_disp(s)": [], "no_issues": True, "FWD?": False
     }
 
 def read_desc_date(procstr):
@@ -480,7 +481,7 @@ def decide_trial_type(trials):
 
 def read_pat_nums(procstr_full, start_pos):
     # This function will find the patent numbers on the first page of an IPR
-    # If it fails, it will return [], [], False (False being for issue flag)
+    # If it fails, it will return [], [], False, False, f_end (False being for issue flag)
 
     procstr = procstr_full[start_pos+1:].replace(" ","")
     error_flag = True
@@ -503,9 +504,9 @@ def read_pat_nums(procstr_full, start_pos):
         snip = procstr[pos0:]
     # Two fail conditions: snip not long enough and no occurences of "patent"
     else:
-        return [], [], False, False
+        return [], [], False, False, (f_end + start_pos + 1)
     if len(snip) < 7:
-        return [], [], False, False
+        return [], [], False, False, (f_end + start_pos + 1)
 
     # Search for different types of patents
     patent_list = []
@@ -563,8 +564,86 @@ def read_pat_nums(procstr_full, start_pos):
     if len(patent_list) > 1: mult_pat = True
     else: mult_pat = False
 
-    return patent_list, pattype_list, mult_pat, error_flag
-        
+    return patent_list, pattype_list, mult_pat, error_flag, (f_end + start_pos + 1)
+
+def read_dec_type(procstr_full, startpos, target):
+    # This function will find the decision type(s) on the first page of an IPR
+    # If it fails, it will return None, False, False (False being for issue flag)
+    
+    if startpos == len(procstr_full) - 1: startpos = int(len(procstr_full)/2)
+    procstr = procstr_full[startpos:]
+    procstr = procstr.replace("J udge", "Judge")
+
+    # Look for a "35" or "37" preceded by a "\n"
+    if procstr.find("\n35") != -1:
+        pos1 = procstr.find("\n35")
+    elif procstr.find("\n37") != -1:
+        pos1 = procstr.find("\n37")
+    elif procstr.find("§") != -1:
+        ps = procstr.find("§")
+        possibilites = [m.start() for m in re.finditer("\n", procstr[:ps])]
+        pos1 = possibilites[-1:][0]
+    elif procstr.find("U.S.C.") != -1:
+        ps = procstr.find("U.S.C.")
+        possibilites = [m.start() for m in re.finditer("\n", procstr[:ps])]
+        pos1 = possibilites[-1:][0]
+    elif procstr.find("C.F.R.") != -1:
+        ps = procstr.find("C.F.R.")
+        possibilites = [m.start() for m in re.finditer("\n", procstr[:ps])]
+        pos1 = possibilites[-1:][0]
+    else:
+        return ipr_data[target]["fd_type(s)"], ipr_data[target]["FWD?"], False
+
+    # Look for a "judge" or "administrative" or "patent" followed by first "\n"
+    stopper = False
+    if procstr.lower().find("judge",0,pos1) != -1:
+        ps = [m.start() for m in re.finditer("judge", procstr[:pos1].lower())]
+        phold = ps[-1:][0]
+        pos0 = procstr[phold:pos1].find("\n")
+        if pos0 != -1:
+            pos0 += phold + 1
+            stopper = True
+
+    if stopper == False and procstr.lower().find("administrative",0,pos1) != -1:
+        ps = [m.start() for m in re.finditer("administrative", procstr[:pos1].lower())]
+        phold = ps[-1:][0]
+        pos0 = procstr[phold:pos1].find("\n")
+        if pos0 != -1:
+            pos0 += phold + 1
+            stopper = True
+
+    if stopper == False and procstr.lower().find("patent",0,pos1) != -1:
+        ps = [m.start() for m in re.finditer("patent", procstr[:pos1].lower())]
+        phold = ps[-1:][0]
+        pos0 = procstr[phold:pos1].find("\n")
+        if pos0 != -1:
+            pos0 += phold + 1
+            stopper = True
+
+    if stopper == False:
+        return ipr_data[target]["fd_type(s)"], ipr_data[target]["FWD?"], False
+    else:
+        snip = procstr[pos0:pos1]
+
+    # Clean up the results snip
+    snip = snip.replace("\n", " ")
+    if snip[0] == " ": snip = snip[1:]
+    snip = snip.replace("J UDGMENT", "JUDGMENT")
+    snip = snip.replace("0f", "of")
+    snip = snip.replace("0F", "OF")
+
+    # Check for occurences of final written decision
+    score = 0
+    words = ["final", "written", "decision"]
+    for word in words:
+        if snip.lower().find(word) != -1:
+            score += 1
+
+    if score >= 2: fwd = True
+    else: fwd = False
+
+    return snip, fwd, True
+    
 def main():
     # Step 1: compile list of ipr documents to analyze
     subpath = os.path.join(in_dir,fold)
@@ -591,15 +670,18 @@ def main():
 
         # Preliminiarily set "fd_type(s)" based on the filename
         if 'final written decision' in file_ident.lower():
-            ipr_data[file]["fd_type(s)"].append("final written decision")
+            ipr_data[file]["fd_type(s)"] = "final written decision"
+            ipr_data[file]["FWD?"] = True
         if 'terminating' in file_ident.lower() or 'termination' in file_ident.lower():
-            ipr_data[file]["fd_type(s)"].append("termination of proceeding")
+            if ipr_data[file]["fd_type(s)"] is None:
+                ipr_data[file]["fd_type(s)"] = "termination of proceeding"
+            else: ipr_data[file]["fd_type(s)"] += " and termination of proceeding"
 
-    # Step 3: Identify and target possible IPRs (round 1)
+    ######## NOT USING THIS ######### Step 3: Identify and target possible IPRs (round 1) ###########
     tad = ipr_data.copy()
     # Must meet 2 conditions: 1. Not CBM or PGR 2. Not "termination of proceeding"
-    tad = {k1: v1 for k1, v1 in tad.items() if (v1["trial_type"] != "CBM" and 
-            v1["trial_type"] != "PGR" and "termination of proceeding" not in v1["fd_type(s)"])}
+    #tad = {k1: v1 for k1, v1 in tad.items() if (v1["trial_type"] != "CBM" and 
+    #        v1["trial_type"] != "PGR" and "termination of proceeding" not in v1["fd_type(s)"])}
     targets = tad.keys()
 
     # Step 4: Analyze the contents of the first page of targets
@@ -647,7 +729,6 @@ def main():
         #print("----Patent Holders----")
         #for ph in pholders:
         #    print(ph)
-        #print("\n\n")
         
         # Pull trial number from the first page
         trial_nums, error_free = read_trial_nums(procstr, trialnum_start, target)
@@ -672,21 +753,52 @@ def main():
         #print("")
 
         # Pull patent numbers from the first page
-        pat_nums, pat_types, mult_pat, error_free = read_pat_nums(procstr, trialnum_start)
+        pat_nums, pat_types, mult_pat, error_free, dectypestarter = read_pat_nums(procstr, trialnum_start)
+        ipr_data[target]["pat_num(s)"] = pat_nums
+        ipr_data[target]["pat_type(s)"] = pat_types
+        ipr_data[target]["mult_pat"] = mult_pat
+        ipr_data[target]["no_issues"] = bool(ipr_data[target]["no_issues"] * error_free)    
+
+        #print(target)
+        #print("patents:")
+        #for pat in pat_nums:
+        #    print(pat)
+        #    if len(pat) > 7: print("LONGER THAN 7 CHARs")
+        #print(pat_types)
+        #print(error_free)
+        #print("")
+
+        # Pull decision type(s) from the first page
+        dec_types, fwd, error_free = read_dec_type(procstr, dectypestarter, target)
+        ipr_data[target]["df_type(s)"] = dec_types
+        ipr_data[target]["FWD?"] = fwd
+        ipr_data[target]["no_issues"] = bool(ipr_data[target]["no_issues"] * error_free)            
+
+        #print(target)
+        #print(dec_types)
+        #print(fwd)
+        #print(error_free)
+        #print("")
 
         print(target)
-        for pat in pat_nums:
-            print(pat)
-            if len(pat) > 7: print("LONGER THAN 7 CHARs")
-        print(pat_types)
-        print(error_free)
+        #print("----Petitioners----")
+        #for pet in petitioners:
+        #    print(pet)
+        #print("----Patent Holders----")
+        #for ph in pholders:
+        #    print(ph)
+        #print("----------------------")
+        #print(trial_type)
+        #print("patents:")
+        #for pat in pat_nums:
+        #    print(pat)
+        #    if len(pat) > 7: print("LONGER THAN 7 CHARs")
+        print(dec_types)
+        print(fwd)
         print("")
-
-        # "pat_num(s)"    : ["6658464"] or ["43919"] or ["unknown"] or []
-        # "pat_type(s)"   : ["B2"] or ["RE"] or ["unknown"] or []
-        # "mult_pat"      : True or False
-
-
+    
+    ## Step 5: Output to excel file for manipulation
+    #output_data2excel(ipr_data)
 
 
 if __name__ == "__main__":

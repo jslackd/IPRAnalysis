@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>15f4b6f8-e5a6-4798-b4e7-24112c60e93a</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>read_ipr_docs.py</StartupFile>
+    <StartupFile>read_ipr_fpage.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -22,7 +22,7 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="read_ipr_docs.py">
+    <Compile Include="read_ipr_fpage.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="pull_ipr_ptab.py">
