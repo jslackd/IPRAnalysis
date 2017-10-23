@@ -24,9 +24,10 @@ import itertools
 import re
 
 in_dir = "in_data"
-#fold = "all_iprs"
-fold = "test_docs2"
+fold = "all_iprs"
+#fold = "test_docs2"
 out_file = "ipr_read_data.xlsx"
+temp_dir = "C:\\Users\\Johnny\\AppData\\Local\\Temp"
 
 res = 400
 
@@ -685,17 +686,20 @@ def main():
     targets = tad.keys()
 
     # Step 4: Analyze the contents of the first page of targets
+    printcounter = 1
     for target in targets:
+        print(printcounter)
+        printcounter += 1
         # Convert first page into png image
         file = os.path.join(subpath, target + "[0]")
         with IMG(filename = file, resolution=res) as imgs:
             imgs.compression_quality = 99
-            img = imgs.sequence[0]
-            img.type = 'truecolor'
-            IMG(img).save(filename = "temporary.png")
+            with imgs.sequence[0] as img:
+                img.type = 'truecolor'
+                IMG(img).save(filename = "in1.png")
 
         # Read text using tesseract OCR
-        imagein = Image.open("temporary.png")
+        imagein = Image.open("in1.png")
         imagein = imagein.convert('L')
         imagein = imagein.filter(ImageFilter.SHARPEN)
         tessdata_dir_config = '--tessdata-dir "C:\\Program Files (x86)\\Tesseract-OCR\\tessdata" -oem 2 -psm 11'
@@ -781,21 +785,30 @@ def main():
         #print("")
 
         print(target)
-        #print("----Petitioners----")
-        #for pet in petitioners:
-        #    print(pet)
-        #print("----Patent Holders----")
-        #for ph in pholders:
-        #    print(ph)
-        #print("----------------------")
-        #print(trial_type)
-        #print("patents:")
-        #for pat in pat_nums:
-        #    print(pat)
-        #    if len(pat) > 7: print("LONGER THAN 7 CHARs")
+        print("----Petitioners----")
+        for pet in petitioners:
+            print(pet)
+        print("----Patent Holders----")
+        for ph in pholders:
+            print(ph)
+        print("----------------------")
+        print(trial_type)
+        print("patents:")
+        for pat in pat_nums:
+            print(pat)
+            if len(pat) > 7: print("LONGER THAN 7 CHARs")
         print(dec_types)
         print(fwd)
         print("")
+
+        # Cleanup Wand's shit
+        os.remove("in1.png")
+        file_dump = os.listdir(temp_dir)
+        for filed in file_dump:
+            if "magick" in filed:
+                try: os.remove(os.path.join(temp_dir,filed))
+                except PermissionError:
+                    continue
     
     ## Step 5: Output to excel file for manipulation
     #output_data2excel(ipr_data)
