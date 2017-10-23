@@ -25,7 +25,7 @@ import re
 
 in_dir = "in_data"
 #fold = "all_iprs"
-fold = "test_docs"
+fold = "test_docs2"
 out_file = "ipr_read_data.xlsx"
 
 res = 400
@@ -40,8 +40,8 @@ ipr_data = collections.OrderedDict()
 #       "dec_date"      : "12/16/2015" or None
 #       "pet_name(s)"   : ["BIO-RAD LABORATORIES, INC.,"] or ["unknown"] or []
 #       "ph_name(s)"    : ["CALIFORNIA INSTITUTE OF TECHNOLOGY"] or ["unknown"] or []
-#       "pat_num(s)"    : ["6658464"] or ["43919"] or ["unknown"] or []
-#       "pat_type(s)"   : ["B2"] or ["RE"] or ["unknown"] or []
+#       "pat_num(s)"    : ["6658464"] or ["677,234"] or ["43919"] or ["unknown"] or []
+#       "pat_type(s)"   : ["PAT-B2"] or ["RE--E"] or ["D---"] or ["unknown"] or []
 #       "mult_pat"      : True or False
 #       "order_txt"     : "ORDERED that the joint motion to terminate the proceeding is GRANTED and . . ."
 #       "order_disp(s)" : [["6658464", "unpatentable", [1,2,3,4,5,6,7,8,9,14]], [ ] ]  or []
@@ -381,7 +381,8 @@ def read_pholder_names(procstr_full, start_pos):
     return pholders_new, True, (ender + start_pos)
 
 def read_trial_nums(procstr_full, start_pos, target):
-    #print(procstr_full[start_pos+1:].replace(" ",""))
+    # This function will find the trial numbers on the first page of an IPR
+    # If it fails, it will return [], False (False being for issue flag)
 
     procstr = procstr_full[start_pos+1:].replace(" ","")
     error_flag = True
@@ -478,8 +479,92 @@ def decide_trial_type(trials):
     return ttype, error_flag
 
 def read_pat_nums(procstr_full, start_pos):
-    pass
+    # This function will find the patent numbers on the first page of an IPR
+    # If it fails, it will return [], [], False (False being for issue flag)
 
+    procstr = procstr_full[start_pos+1:].replace(" ","")
+    error_flag = True
+    # Find farthest outer bound based on "before" or "judge" or "administrative"
+    if procstr.lower().find("before") != -1:
+        f_end = procstr.lower().find("before")
+    elif procstr.lower().find("judge") != -1:
+        f_end = procstr.lower().find("judge")
+    elif procstr.lower().find("administrative") != -1:
+        f_end = procstr.lower().find("administrative")
+    else:
+        f_end = len(procstr) - 1
+    procstr = procstr[:f_end]
+
+    # Find first location of "patent" w/o "patentowner"
+    if procstr.lower().find("patent") != -1:
+        pos0 = procstr.lower().find("patent")
+        if procstr.lower().find("owner") == pos0 + 6:
+            pos0 = procstr.lower().find("patent",pos0 + 6)
+        snip = procstr[pos0:]
+    # Two fail conditions: snip not long enough and no occurences of "patent"
+    else:
+        return [], [], False, False
+    if len(snip) < 7:
+        return [], [], False, False
+
+    # Search for different types of patents
+    patent_list = []
+    pattype_list = []
+    formatPAT = re.compile("[0-9].[0-9][0-9][0-9].[0-9][0-9][0-9]")
+    PATposl = [m.start() for m in re.finditer(formatPAT, snip)]
+    for PATpos in PATposl:
+        ender = snip.find("\n",PATpos)
+        patent_list.append(snip[PATpos:ender])
+        pattype_list.append("PAT-")
+        
+    formatD = re.compile("D[0-9][0-9][0-9].[0-9][0-9][0-9]")
+    Dposl = [m.start() for m in re.finditer(formatD, snip)]
+    for Dpos in Dposl:
+        ender = snip.find("\n",Dpos)
+        patent_list.append(snip[Dpos:ender])
+        pattype_list.append("D---")
+
+    formatRE = re.compile("RE[0-9][0-9].[0-9][0-9][0-9]")
+    REposl = [m.start() for m in re.finditer(formatRE, snip)]
+    for REpos in REposl:
+        ender = snip.find("\n",REpos)
+        patent_list.append(snip[REpos:ender])
+        pattype_list.append("RE--")
+
+    if len(patent_list) == 0:
+        error_flag = False
+
+    # Cleanup patent numbers by removing all prefixes, commas, periods, or semicolons
+    for i in range(0,len(patent_list)):
+        cur = patent_list[i]
+        # Remove prefixes
+        pop = 0
+        for x in cur:
+            if x.isdigit() == False: pop += 1
+            else: break
+        cur = cur[pop:] 
+        # Remove commas, periods, semicolons, parens, brackets
+        cur = cur.replace(",",""); cur = cur.replace('.',""); cur = cur.replace(';',"")
+        cur = cur.replace(')',""); cur = cur.replace(']',"")
+        patent_list[i] = cur
+        
+    # Pull patent sub-type from the end of each string
+    subtypes = ["A1","A2","A9","A","B1","B2","B3","B","C1","C2","C3","C","P1","P2","P3","P4","P9","S","E","D"]
+    for i in range(0,len(patent_list)):
+        pat = patent_list[i]
+        for st in subtypes:
+            loc = pat.find(st)
+            if loc != -1:
+                pat = pat[:loc]
+                pattype_list[i] += st
+                patent_list[i] = pat
+                break
+
+    if len(patent_list) > 1: mult_pat = True
+    else: mult_pat = False
+
+    return patent_list, pattype_list, mult_pat, error_flag
+        
 def main():
     # Step 1: compile list of ipr documents to analyze
     subpath = os.path.join(in_dir,fold)
@@ -587,6 +672,15 @@ def main():
         #print("")
 
         # Pull patent numbers from the first page
+        pat_nums, pat_types, mult_pat, error_free = read_pat_nums(procstr, trialnum_start)
+
+        print(target)
+        for pat in pat_nums:
+            print(pat)
+            if len(pat) > 7: print("LONGER THAN 7 CHARs")
+        print(pat_types)
+        print(error_free)
+        print("")
 
         # "pat_num(s)"    : ["6658464"] or ["43919"] or ["unknown"] or []
         # "pat_type(s)"   : ["B2"] or ["RE"] or ["unknown"] or []
