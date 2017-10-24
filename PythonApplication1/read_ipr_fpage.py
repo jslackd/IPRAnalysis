@@ -40,14 +40,14 @@ ipr_data = collections.OrderedDict()
 #       "no_issues"     : False or True
 ### Not using the following:
 #       "order_txt"     : "ORDERED that the joint motion to terminate the proceeding is GRANTED and . . ."
-#       "order_disp(s)" : [["6658464", "unpatentable", [1,2,3,4,5,6,7,8,9,14]], [ ] ]  or []
+#       "order_disp(s)" : {"6658464": {"c-range": "1-9,14" , "disposition": "unpatentable"}}
 
 
 def create_dictionary_entry(fname):
     ipr_data[fname] = {
         "trial_num(s)": [], "trial_type": None, "fd_type(s)": None, "mult_pat": False,
         "dec_date": None, "pet_name(s)": [], "ph_name(s)": [], "pat_num(s)": None,
-        "pat_type(s)": [], "order_txt": None, "order_disp(s)": [], "no_issues": True, "FWD?": False
+        "pat_type(s)": [], "order_txt": None, "order_disp(s)": {}, "no_issues": True, "FWD?": False
     }
 
 def read_desc_date(procstr):
