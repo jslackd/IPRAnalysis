@@ -28,6 +28,9 @@
     <Compile Include="pull_ipr_ptab.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="read_ipr_fwds.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="solution.py" />
   </ItemGroup>
   <ItemGroup>
