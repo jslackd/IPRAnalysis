@@ -17,7 +17,7 @@ import xlsxwriter
 
 in_dir = "in_data"
 #fold = "all_iprs"
-fold = "test_docs2"
+fold = "test_docs"
 out_file = "ipr_read_data.xlsx"
 temp_dir = "C:\\Users\\Johnny\\AppData\\Local\\Temp"
 
@@ -38,10 +38,6 @@ ipr_data = collections.OrderedDict()
 #       "pet_name(s)"   : ["BIO-RAD LABORATORIES, INC.,"] or ["unknown"] or []
 #       "ph_name(s)"    : ["CALIFORNIA INSTITUTE OF TECHNOLOGY"] or ["unknown"] or []
 #       "no_issues"     : False or True
-### Not using the following:
-#       "order_txt"     : "ORDERED that the joint motion to terminate the proceeding is GRANTED and . . ."
-#       "order_disp(s)" : {"6658464": {"c-range": "1-9,14" , "disposition": "unpatentable"}}
-
 
 def create_dictionary_entry(fname):
     ipr_data[fname] = {

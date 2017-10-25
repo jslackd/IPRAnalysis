@@ -17,10 +17,14 @@ import xlsxwriter
 import pandas as pd
 from pandas import ExcelWriter
 from pandas import ExcelFile
+import numpy as np
+import PyPDF2
+from multiprocessing.dummy import Pool as ThreadPool
+import itertools
 
 in_dir = "in_data"
 #fold = "all_iprs"
-fold = "test_docs2"
+fold = "test_docs"
 out_file = "ipr_read_data.xlsx"
 temp_dir = "C:\\Users\\Johnny\\AppData\\Local\\Temp"
 
@@ -40,18 +44,19 @@ ipr_data = collections.OrderedDict()
 #       "mult_pat"      : True or False
 #       "pet_name(s)"   : ["BIO-RAD LABORATORIES, INC.,"] or ["unknown"] or []
 #       "ph_name(s)"    : ["CALIFORNIA INSTITUTE OF TECHNOLOGY"] or ["unknown"] or []
-#       "no_issues"     : False or True
+#       "no_issues"     : False or True (default is True)
 ### Finding the following:
 #       "order_txt"     : "ORDERED that the joint motion to terminate the proceeding is GRANTED and . . ."
 #       "order_disp(s)" : {"6658464": {"c-range": "1-9,14" , "disposition": "unpatentable"}}
-#       "no_issues2"    : True or False
+#       "no_issues2"    : True or False (default is True)
+#       "expect_ccd"    : False or True (default is False)
 
 def create_dictionary_entry(fname):
     ipr_data[fname] = {
         "trial_num(s)": [], "trial_type": None, "fd_type(s)": None, "mult_pat": False,
         "dec_date": None, "pet_name(s)": [], "ph_name(s)": [], "pat_num(s)": None,
         "pat_type(s)": [], "order_txt": None, "order_disp(s)": {}, "no_issues": True, "FWD?": False,
-        "no_issues2": True
+        "no_issues2": True, "expect_ccd": True
     }
 
 def pull_iprdata_ff(file_out, dir, fold):  
@@ -237,16 +242,148 @@ def write_ipr_data2(data_in, keys, keys2, file_out):
     for key2 in keys2:
         pass
 
+def pat_type_check(list_of_nums):
+    # Helper function for screening out list of patents with PAT and not RE, D, etc.
+    first3 = np.asarray([el[0:3] for el in list_of_nums[:]])
+    for typef in first3:
+        if typef != "PAT": return False
+    return True
 
+def pull_x_pages(subpath, fname, pages = -4):
+    # Function for converting the last x pages of a document into pdf
+    # Helper function for pooling ocr processing
+    def pooled_tesseract_ocr(imagein):
+        imagein = imagein.convert('L')
+        imagein = imagein.filter(ImageFilter.SHARPEN)
+        tessdata_dir_config = '--tessdata-dir "C:\\Program Files (x86)\\Tesseract-OCR\\tessdata" -oem 2 -psm 11'
+        text_read = pytesseract.image_to_string(imagein, boxes = False, config=tessdata_dir_config)
+        return text_read
+
+    # First, find the number of pages in the pdf
+    filestart = os.path.join(subpath, fname)
+    filestartn = filestart.replace("\\","/")
+    file = open(filestartn,'rb')
+    reader = PyPDF2.PdfFileReader(file)
+    lastpage = reader.getNumPages() - 1
+    file.close()
+
+    # Revise page range based on the number of pages in the doc
+    if pages < 0 and pages*-1 > lastpage+1:
+        pages = (lastpage+1)*-1
+    if pages > 0 and pages > lastpage+1:
+        pages = lastpage+1
+
+    # Put pages to convert in a list
+    if pages < 0:
+        num = pages*-1
+        subtr = np.array(list(range(0,num)))
+        finalp = np.multiply(np.ones(np.size(subtr)),lastpage).astype(int)
+        pages = finalp - subtr[::-1]
+    elif pages > 0:
+        pages = np.array(list(range(0,pages)))  
+
+    # Convert x pages into png image
+    text_out = []
+    for page in pages:
+        with IMG(filename = filestart + "["+str(page)+"]", resolution=res) as imgs:
+            imgs.compression_quality = 99
+            with imgs.sequence[0] as img:
+                img.type = 'truecolor'
+                IMG(img).save(filename = "fwd" + str(page) + ".png")
+
+    # Cleanup (must be in admin mode)
+    file_dump = os.listdir(temp_dir)
+    for filed in file_dump:
+        if "magick" in filed:
+            try: os.remove(os.path.join(temp_dir,filed))
+            except PermissionError:
+                continue  
+
+    # Read text using tesseract OCR
+    image_vect = []
+    for page in pages:
+        image_vect.append(Image.open("fwd" + str(page) + ".png"))
+
+    pool = ThreadPool(5)
+    results = pool.map(pooled_tesseract_ocr, image_vect)
+    i = 0
+    for result in results:
+        text_out.append(result)
+        image_vect[i].close()
+        os.remove("fwd" + str(pages[i]) + ".png")
+        i += 1
+    pool.close()
+    pool.join()
+
+    ## Convert x pages into png image
+    #text_out = []
+    #for page in pages:
+    #    with IMG(filename = filestart + "["+str(page)+"]", resolution=res) as imgs:
+    #        imgs.compression_quality = 99
+    #        with imgs.sequence[0] as img:
+    #            img.type = 'truecolor'
+    #            IMG(img).save(filename = "fwd" + str(page) + ".png")
+
+    #    # Read text using tesseract OCR
+    #    imagein = Image.open("fwd" + str(page) + ".png")
+    #    imagein = imagein.convert('L')
+    #    imagein = imagein.filter(ImageFilter.SHARPEN)
+    #    tessdata_dir_config = '--tessdata-dir "C:\\Program Files (x86)\\Tesseract-OCR\\tessdata" -oem 2 -psm 11'
+    #    text_read = pytesseract.image_to_string(imagein, boxes = False, config=tessdata_dir_config)
+
+    #    text_out.append(text_read)
+
+    #    # Cleanup (must be in admin mode)
+    #    os.remove("fwd" + str(page) + ".png")
+    #    file_dump = os.listdir(temp_dir)
+    #    for filed in file_dump:
+    #        if "magick" in filed:
+    #            try: os.remove(os.path.join(temp_dir,filed))
+    #            except PermissionError:
+    #                continue
+
+    return text_out
+
+def cleanup_text(text_list):
+    revise = collections.OrderedDict()
+    revise["0RDER"] = "ORDER"
+    revise["oRDER"] = "ORDER"
+    revise["C0NCLUSION"] = "CONCLUSION"
+    revise["C0NCLUSI0N"] = "CONCLUSION"
+    revise["CONCLUSI0N"] = "CONCLUSION"
+    for i in range(0,len(text_list)):
+        for entry in revise:
+            text_list[i] = text_list[i].replace(entry, revise[entry])
+    return text_list
 
 def main():
     # Step 1: Read contents of existing ipr_read_data excel file and save to dictionary format
     pull_iprdata_ff(out_file, in_dir,fold)
 
-    # Step 2:
+    # Step 2: Identify targeted IPR trials (filter 1)
+    tad = ipr_data.copy()
+    # Must meet 4 conditions: 1. trial type is IPR or Mult. 2. At least one PAT- 3. FWD? is True
+    tad = {k1: v1 for k1, v1 in tad.items() if (v1["FWD?"] == True and pat_type_check(v1["pat_type(s)"]) == True and 
+            (v1["trial_type"] == "IPR" or v1["trial_type"] == "Mult." ))}
+    targets = tad.keys()
 
-    # Step X: Write all of our data to the output file
-    write_ipr_data2(ipr_data, ipr_data.keys(), targets, file_out)
+    # Step 3: Analyze claim disposition of final written decisions for targeted applications
+    subpath = os.path.join(in_dir,fold)
+    print_counter = 1
+    for target in targets:
+        print(print_counter)
+        print_counter += 1
+        # Pull text from last 4 pages of the pdf document
+        text_read_list = pull_x_pages(subpath, target, -5)
+        print(text_read_list)
+
+        ## Clean up text for crucial keywords
+        text_read_list = cleanup_text(text_read_list)
+
+        # 
+
+    ## Step X: Write all of our data to the output file
+    #write_ipr_data2(ipr_data, ipr_data.keys(), targets, file_out)
 
 
 if __name__ == "__main__":
