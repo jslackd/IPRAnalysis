@@ -4,28 +4,24 @@
 
 import os
 import sys
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageFilter
 import pytesseract
 import collections
 import re
-from datetime import date
-from datetime import datetime
 from wand.image import Image as IMG
 import os
-import itertools
 import xlsxwriter
 import pandas as pd
-from pandas import ExcelWriter
-from pandas import ExcelFile
 import numpy as np
 import PyPDF2
 from multiprocessing.dummy import Pool as ThreadPool
-import itertools
+from difflib import SequenceMatcher
 
 in_dir = "in_data"
 #fold = "all_iprs"
 fold = "test_docs"
 out_file = "ipr_read_data.xlsx"
+out_file2 = "ipr_read_data+.xlsx"
 temp_dir = "C:\\Users\\Johnny\\AppData\\Local\\Temp"
 
 res = 400
@@ -47,9 +43,10 @@ ipr_data = collections.OrderedDict()
 #       "no_issues"     : False or True (default is True)
 ### Finding the following:
 #       "order_txt"     : "ORDERED that the joint motion to terminate the proceeding is GRANTED and . . ."
-#       "order_disp(s)" : {"6658464": {"c-range": "1-9,14" , "disposition": "unpatentable"}}
-#       "no_issues2"    : True or False (default is True)
+#       "order_disp(s)" : {"6658464": {"c-range": ["1-9,14"] , "disposition": ["unpatentable"]}}
+#       "new_page?"     : False or True (default is False)
 #       "expect_ccd"    : False or True (default is False)
+#       "no_issues2"    : True or False (default is True)
 
 def create_dictionary_entry(fname):
     ipr_data[fname] = {
@@ -230,12 +227,15 @@ def write_ipr_data2(data_in, keys, keys2, file_out):
     worksheet2.write('C1', 'Trial Date', header_format)
     worksheet2.write('D1', 'Decision Type(s)', header_format)
     worksheet2.write('E1', 'Trial Patent Holder Name(s)', header_format)  
-    worksheet2.write('F1', 'Relevant Order Text', header_format)  
+    worksheet2.write('F1', 'Order Text', header_format)  
     worksheet2.write('G1', 'Associated Patent', header_format)
     worksheet2.write('H1', 'Associated Patent Type', header_format) 
     worksheet2.write('I1', 'Affected Claim(s)', header_format)
-    worksheet2.write('J1', 'Claim(s) Disposition', header_format) 
-    worksheet2.write('K1', 'Filename', header_format)
+    worksheet2.write('J1', 'Claim(s) Disposition', header_format)
+    worksheet2.write('K1', 'Order Issues?', header_format)
+    worksheet2.write('L1', 'Claim Disp. Issues?', header_format)
+    worksheet2.write('M1', 'Multi-Page Order?', header_format)
+    worksheet2.write('N1', 'Filename', header_format)
 
     # Write in data for each ipr on our second worksheet:
     row = 1
@@ -356,6 +356,402 @@ def cleanup_text(text_list):
             text_list[i] = text_list[i].replace(entry, revise[entry])
     return text_list
 
+def order_extract(text_list):
+    def find_semicolons(texter,st):
+        scs1 = text.find(";\n",st)
+        scs2 = text.find("; and\n",st)
+        scs3 = text.find(";and\n",st)
+
+        if scs1 > 0 and scs2 > 0 and scs3 > 0:
+            return min(scs1,scs2,scs3)
+        elif scs1 > 0 and scs2 > 0:
+            return min(scs1,scs2)
+        elif scs1 > 0 and scs3 > 0:
+            return min(scs1,scs3)
+        elif scs2 > 0 and scs3 > 0:
+            return min(scs2, scs3)
+        elif scs1 == -1 and scs2 == -1 and scs3 == -1:
+            return -1
+        else:
+            return max(scs1,scs2,scs3)
+
+    # Start by cleaning out headers from each text string
+    match = SequenceMatcher(None, text_list[0], text_list[1]).find_longest_match(0, len(text_list[0]), 0, len(text_list[1]))
+    if match.a <= 1 and match.b <= 1 and match.size > 9:
+        match_text = text_list[0][match.a: match.a + match.size]
+        if match_text[-2:] == "/n/n": match_text = match_text[:-1]
+        for g in range(0,len(text_list)):
+            text_list[g] = text_list[g].replace(match_text,"")
+
+    error_flag = True
+    rev_list = []
+
+    # First, search for CONCLUSION
+    i = 0
+    for text in text_list:
+        if text.find("CONCLUSION") != -1:
+            startl = i
+            startpos = text.find("CONCLUSION")
+            i = -1
+            break
+        i += 1
+    # If CONCLUSION does not occur, then find ORDER
+    if i != -1:
+        i = 0
+        for text in text_list:
+            if text.find("ORDER") != -1:
+                startl = i
+                startpos = text.find("ORDER")
+                i = -1
+                break
+    # Otherwise, search for ORDER starting at CONCLUSION position
+    else:
+        i = startl
+        for text in text_list[startl:]:
+            if i == startl:
+                if text.find("ORDER",startpos) != -1:
+                    startl = i
+                    startpos = text.find("ORDER",startpos)
+                    i = -1
+                    break
+            else:
+                if text.find("ORDER") != -1:
+                    startl = i
+                    startpos = text.find("ORDER")
+                    i = -1
+                    break
+            i += 1
+    # If CONCLUSION and ORDER do not exist, then return empty and error
+    if i != -1:
+        return "", [], False, False
+    else:
+        text_list = text_list[startl:]
+        text_list[0] = text_list[0][startpos:]
+
+    # Cleanup start of "ORDER"
+    if text_list[0].find("ORDER\n") == 0:
+        text_list[0] = text_list[0][6:]
+    elif text_list[0].find("ORDERED") == 0:
+        pass
+    else:
+        pass
+    # Cleanup line endings after periods.
+    for j in range (0,len(text_list)):
+        new_text = text_list[j]
+        new_text = new_text.replace("U.S.\n", "U.S. ")
+        new_text = new_text.replace("US.\n", "U.S. ")
+        new_text = new_text.replace("No.\n", "No. ")
+        new_text = new_text.replace("U.S.C.\n", "U.S.C. ")
+        new_text = new_text.replace("C.F.R.\n", "C.F.R. ")
+        new_text = new_text.replace("CFR.\n", "C.F.R. ")
+        new_text = new_text.replace("C.P.R.\n", "C.F.R. ")
+        new_text = new_text.replace("CPR.\n", "C.F.R. ")
+        if new_text[-1] == ".":
+            new_text = new_text + "\n"
+        text_list[j] = new_text
+
+    # Find end sets, and determine the end of the full order
+    orders = []; handler = text_list.copy()
+    i = 0; newp = False; period = False; carry_over = None
+    for text in handler:
+        i += 1
+        # Exit upper loop based on period finding
+        if period == True:
+            break
+        # Start unique search if carry_over != None
+        if carry_over is not None:
+            s2per = text.find(".\n",0) # possible position of end of Order
+            s2col = find_semicolons(text,0) # possible position of end of order set
+            if s2per == -1 and s2col == -1:
+                # If we are on the last page, then append everything
+                if i == len(handler):
+                    orders.append(carry_over + text)
+                    error_flag = False
+                    break
+                else:
+                    carry_over = carry_over + text
+                    error_flag = False
+                    continue
+            # "ORDER" followed by semicolon, but not period
+            elif s2per == -1 and s2col != -1:
+                orders.append(carry_over + text[0:s2col])
+                carry_over = None
+                breaker = 0; s2 = s2col
+            # "ORDER" followed by period, but no semicolon
+            elif s2per != -1 and s2col == -1:
+                orders.append(carry_over + text[0:s2per])
+                period = True
+                continue
+            # "ORDER" followed by period and semicolon
+            else:
+                if s2per < s2col:
+                    orders.append(carry_over + text[0:s2per])
+                    period = True
+                    continue        
+                else:
+                    orders.append(carry_over + text[0:s2col])
+                    carry_over = None
+                    breaker = 0; s2 = s2col        
+        else:
+            breaker = 0
+            s2 = 0
+
+        while breaker == 0:
+            s1 = text.find("ORDER",s2)
+            if s1 != -1:
+                s2per = text.find(".\n",s1) # possible position of end of Order
+                s2col = find_semicolons(text,s1) # possible position of end of order set
+                # "ORDER" exists, but no period or semicolon; continue to next page
+                if s2per == -1 and s2col == -1:
+                    # If we are on the last page, then append everything
+                    if i == len(handler):
+                        orders.append(text[s1:])
+                        error_flag = False
+                    else:
+                        carry_over = text[s1:]
+                    breaker = 1
+                    newp = True
+                    continue
+                # "ORDER" followed by semicolon, but not period
+                elif s2per == -1 and s2col != -1:
+                    newp = True
+                    orders.append(text[s1:s2col])
+                    breaker = 0; s2 = s2col
+                    continue
+                # "ORDER" followed by period, but no semicolon
+                elif s2per != -1 and s2col == -1:
+                    orders.append(text[s1:s2per])
+                    breaker = 1
+                    period = True
+                    continue
+                # "ORDER" followed by period and semicolon
+                else:
+                    if s2per < s2col:
+                        orders.append(text[s1:s2per])
+                        breaker = 1
+                        period = True
+                        continue        
+                    else:
+                        orders.append(text[s1:s2col])
+                        breaker = 0; s2 = s2col
+                        continue           
+            else:
+                breaker = 1
+
+    fulltxt = "; ".join(orders)
+    fulltxt = fulltxt.replace("\n"," ")
+
+    return fulltxt, orders, error_flag, newp
+
+def order_claim_disposition(order_set, target):
+    # Helper function for cleaning up the order text
+    def cleanup_order(ordin):
+        # Replace line and tab characters with spaces
+        ordout = ordin.replace("\n"," ")
+        ordout = ordout.replace("\t"," ")
+        ordout = ordout.replace("  ", " ")
+        # Correct phantom spaces in between numbers (i.e. "claim 13, 1 5, 17")
+        sb = re.compile("[0-9] [0-9]")
+        numseplist = re.findall(sb,ordout)
+        for numsep in numseplist:
+            f1 = numsep[0]; f2 = numsep[2]
+            ordout = ordout.replace(numsep,f1+f2)
+        # Replace "—" with "-"
+        ordout = ordout.replace("—","-")
+        return ordout
+    # Helper function for finding verb phrases in an order text
+    def find_verb(phrase_list):
+        for phraser in phrase_list:
+            for rekey in verbs.keys():
+                flist = re.findall(rekey,phraser)
+                if len(flist) != 0:
+                    return verbs[rekey]
+        return None
+    # Helper function for finding adjective phrases in an order text 
+    def find_adj(phrase_list):
+        for phraser in phrase_list:
+            for rekey in adject.keys():
+                flist = re.findall(rekey,phraser)
+                if len(flist) != 0:
+                    return adject[rekey]
+        return None
+    # Helper function for finding patent numbers in an order text
+    def find_patnum(phrase_list, patent_list):
+        regexlist = []; err = True
+        for p in patent_list:
+            if len(p) != 7:
+                err = False
+                regexlist.append(re.compile("oaiwjeofijiaoiwer"))
+            else:
+                #regexlist.append(re.compile(p[0]+"(?:,|\s)\s*"+p[1]+p[2]+p[3]+"(?:,|\s)\s*"+p[4]+p[5]+p[6]))
+                regexlist.append(re.compile(p[4]+p[5]+p[6]))
+        for phraser in phrase_list:
+            j = 0
+            for regcomp in regexlist:
+                finder = re.findall(regcomp,phraser)
+                if len(finder) != 0:
+                    return patent_list[j], err
+                j+=1
+        return None, False
+    # Helper function for finding claim numbers in an order text
+    def strip_claim_nums(claimtxt):
+        claimtxt = claimtxt.replace(",","")
+        claimtxt = claimtxt.replace("and","")
+        claimtxt = claimtxt.replace("  ", " ")
+        txtlist = claimtxt.split(" ")
+        if txtlist[0].lower() == "claim" or txtlist[0].lower() == "claims":
+            txtlist.pop(0)
+        numstringlst = []
+        for txt in txtlist:
+            if txt[0].isdigit() == True and txt[-1].isdigit() == True:
+                numstringlst.append(txt)
+            else:
+                break
+        return ",".join(numstringlst)
+
+    # Initialize reference vars
+    pat_list = ipr_data[target]["pat_num(s)"]
+    mult_pat = ipr_data[target]["mult_pat"]
+    error_flag = True
+    ccd_error = False
+
+    # Create dictionary of verbiage and adjectives
+    verbs = collections.OrderedDict()
+    verbs[re.compile("has not been shown", re.IGNORECASE)] = False
+    verbs[re.compile("has been shown (?!not)", re.IGNORECASE)] = True
+    verbs[re.compile("have not been shown", re.IGNORECASE)] = False
+    verbs[re.compile("have been shown (?!not)", re.IGNORECASE)] = True
+    verbs[re.compile("is held not", re.IGNORECASE)] = False
+    verbs[re.compile("is held (?!not)", re.IGNORECASE)] = True
+    verbs[re.compile("are held not", re.IGNORECASE)] = False
+    verbs[re.compile("are held (?!not)", re.IGNORECASE)] = True
+    verbs[re.compile("are not", re.IGNORECASE)] = False
+    verbs[re.compile("is not", re.IGNORECASE)] = False
+    verbs[re.compile("are (?!not)", re.IGNORECASE)] = True
+    verbs[re.compile("is (?!not)", re.IGNORECASE)] = True
+    adject = collections.OrderedDict()
+    adject[re.compile("unpatentable", re.IGNORECASE)] = False
+    adject[re.compile("(?!un)patentable", re.IGNORECASE)] = True
+
+    # Initialize the dictionary entries for our results
+    dispos = collections.OrderedDict()
+    for pat in pat_list:
+        dispos[pat] = {"c-range": [], "disposition": []}
+    
+    # Loop through order set and extract claim disposition phrases
+    cl = re.compile("claim(?=s| |$)",re.IGNORECASE)
+    claim_order_ls = []
+    for order in order_set:
+        order = cleanup_order(order)
+    
+        # Find "claim" or "claims"
+        cpos = [m.start() for m in re.finditer(cl, order)]
+        cstrlist = []
+        if len(cpos) == 1:
+            cstrlist.append(order[cpos[0]:])
+        elif len(cpos) > 1:
+            for j in range(0,len(cpos)):
+                if j != len(cpos) - 1:
+                    cstrlist.append(order[cpos[j]:cpos[j+1]])
+                else:
+                    cstrlist.append(order[cpos[j]:])
+        else:
+            continue # no "claims" or "claim"
+        claim_order_ls.append(cstrlist)
+
+    # If we haven't found any claim language, then return nothing and an error
+    if len(claim_order_ls) == 0:
+        error_flag = False
+        return ipr_data[target]["order_disp(s)"], False, error_flag
+
+    # Analyze claim disposition phrases
+    print(ipr_data[target]["order_txt"])
+    print("")
+
+    for phrase_set in claim_order_ls:
+        for phrase in phrase_set:
+
+            print("Mult. Pat:", mult_pat)
+
+            # ONE PATENT CASE
+            if mult_pat == False:
+                # Start by finding verb triggers
+                verb_logic = find_verb([phrase])
+                if verb_logic is None:
+                    verb_logic = find_verb(phrase_set)
+                    if verb_logic is None:
+                        ccd_error = True # no verb phrase at all
+                        print("verb error")
+                        print(phrase_set)
+                        break
+                # Now find the adjective trigger
+                adj_logic = find_adj([phrase])
+                if adj_logic is None:
+                    adj_logic = find_adj(phrase_set)
+                    if adj_logic is None:
+                        ccd_error = True 
+                        print("adj error")
+                        print(phrase_set)
+                        break
+                # We have a a verb and adjective, now find claim numbers
+                patnum = ipr_data[target]["pat_num(s)"][0]
+                string_of_nums = strip_claim_nums(phrase)
+                logic = (verb_logic == adj_logic)
+                if logic == True: logicout = "patentable"
+                else: logicout = "unpatentable"
+                # Save claim dispositions to our temporary dictionary
+                dispos[patnum]["c-range"].append(string_of_nums)
+                dispos[patnum]["disposition"].append(logicout)
+
+                print(logicout)
+                print(string_of_nums)
+                print(patnum)
+
+            # MULTI PATENT CASE
+            else:
+                # Start by finding verb triggers
+                verb_logic = find_verb([phrase])
+                if verb_logic is None:
+                    verb_logic = find_verb([phrase_set[-1]])
+                    if verb_logic is None:
+                        ccd_error = True # no verb phrase at all
+                        print("verb error")
+                        print(phrase_set)
+                        break
+                # Now find the adjective trigger
+                adj_logic = find_adj([phrase])
+                if adj_logic is None:
+                    adj_logic = find_adj([phrase_set[-1]])
+                    if adj_logic is None:
+                        ccd_error = True 
+                        print("adj error")
+                        print(phrase_set)
+                        break
+                # Now find the patent number
+                patnum, errpat = find_patnum([phrase], ipr_data[target]["pat_num(s)"])
+                if patnum is None:
+                    patnum, errpat = find_patnum([phrase_set[-1]], ipr_data[target]["pat_num(s)"])
+                    if errpat == False: error_flag = False
+                    if patnum is None:
+                        ccd_error = True
+                        print("patnum error")
+                        print(phrase_set)
+                        break
+                # We have a verb, adjective, and patent, now find claim numbers
+                string_of_nums = strip_claim_nums(phrase)
+                logic = (verb_logic == adj_logic)
+                if logic == True: logicout = "patentable"
+                else: logicout = "unpatentable"
+                # Save claim dispositions to our temporary dictionary
+                dispos[patnum]["c-range"].append(string_of_nums)
+                dispos[patnum]["disposition"].append(logicout)
+
+                print(logicout)
+                print(string_of_nums)
+                print(patnum)
+
+    return dispos, False, error_flag     
+        
 def main():
     # Step 1: Read contents of existing ipr_read_data excel file and save to dictionary format
     pull_iprdata_ff(out_file, in_dir,fold)
@@ -373,17 +769,35 @@ def main():
     for target in targets:
         print(print_counter)
         print_counter += 1
+
+        print(target)
+
         # Pull text from last 4 pages of the pdf document
         text_read_list = pull_x_pages(subpath, target, -5)
-        print(text_read_list)
+        #print(text_read_list)
 
-        ## Clean up text for crucial keywords
+        # Clean up text for crucial keywords
         text_read_list = cleanup_text(text_read_list)
 
-        # 
+        # Extract full_order text; also, revise the text_read to only contain the order (but still in a list)
+        full_order, revised_text_read, error_free, new_page = order_extract(text_read_list)
+        ipr_data[target]["new_page?"] = new_page
+        ipr_data[target]["no_issues2"] = bool(ipr_data[target]["no_issues2"] * error_free)
+        ipr_data[target]["order_txt"] = full_order
 
-    ## Step X: Write all of our data to the output file
-    #write_ipr_data2(ipr_data, ipr_data.keys(), targets, file_out)
+        #print(full_order)
+        #print(error_free)
+        #print(new_page)
+        #print("")
+
+        # Analyze set of orders for claim disposition
+        claim_dispo, ccd_issue, error_free = order_claim_disposition(revised_text_read, target)
+        ipr_data[target]["order_disp(s)"] = claim_dispo
+        ipr_data[target]["no_issues2"] = bool(ipr_data[target]["no_issues2"] * error_free)
+        ipr_data[target]["expect_ccd"] = ccd_issue
+
+    # Step 4: Write all of our data to the output file
+    write_ipr_data2(ipr_data, ipr_data.keys(), targets, out_file2)
 
 
 if __name__ == "__main__":
