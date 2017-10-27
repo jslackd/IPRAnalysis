@@ -727,8 +727,8 @@ def write_ipr_data2(data_in, keys, keys2, file_out):
     worksheet2.set_column(4,4,40)
     worksheet2.set_column(5,5,60)
     worksheet2.set_column(6,7,12)
-    worksheet2.set_column(8,8,15)
-    worksheet2.set_column(9,9,10)
+    worksheet2.set_column(8,8,30)
+    worksheet2.set_column(9,9,12)
     worksheet2.set_column(13,13,15)
 
     # Write headers for our second worksheet:
@@ -776,8 +776,11 @@ def write_ipr_data2(data_in, keys, keys2, file_out):
             worksheet2.write_string(row,11,bin_trans[data_in[key]["expect_ccd"]],text_format)
             worksheet2.write_string(row,12,bin_trans[data_in[key]["new_page?"]],text_format)
             i+=1
+
         worksheet2.write_string(row_old,13,key,text_format_sm)
         row +=1
+
+    workbook.close()
         
 def main():
     # Step 1: Read contents of existing ipr_read_data excel file and save to dictionary format
