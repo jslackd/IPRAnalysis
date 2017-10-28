@@ -19,7 +19,7 @@ from difflib import SequenceMatcher
 
 in_dir = "in_data"
 #fold = "all_iprs"
-fold = "test_docs"
+fold = "test_docs2"
 out_file = "ipr_read_data.xlsx"
 out_file2 = "ipr_read_data+.xlsx"
 temp_dir = "C:\\Users\\Johnny\\AppData\\Local\\Temp"
@@ -52,7 +52,7 @@ def create_dictionary_entry(fname):
     ipr_data[fname] = {
         "trial_num(s)": [], "trial_type": None, "fd_type(s)": None, "mult_pat": False,
         "dec_date": None, "pet_name(s)": [], "ph_name(s)": [], "pat_num(s)": None,
-        "pat_type(s)": [], "order_txt": None, "order_disp(s)": {}, "no_issues": True, "FWD?": False,
+        "pat_type(s)": [], "order_txt": None, "order_disp(s)": collections.OrderedDict(), "no_issues": True, "FWD?": False,
         "no_issues2": True, "expect_ccd": True
     }
 
@@ -62,7 +62,7 @@ def pull_iprdata_ff(file_out, dir, fold):
         # Read existing file
         df = pd.read_excel(file_out, sheetname='Sheet1')
         file_list_raw = df["Filename"].tolist()
-        to_add_all = df.iloc[0:11]
+        to_add_all = df.iloc[:,0:11]
         to_add_all = to_add_all.values.tolist()
     else:
         sys.exit("Error: ipr_read_data.xlsx DOES NOT EXIST")
@@ -78,49 +78,50 @@ def pull_iprdata_ff(file_out, dir, fold):
     bin_trans_rev = {"No": True, "Yes": False}
     keys = file_list_raw
     for key, data in zip(keys,to_add_all):
+
         create_dictionary_entry(key)
 
-        trial_nums = data[0].split("\n")
+        trial_nums = str(data[0]).split("\n")
         if trial_nums != [""]:
             ipr_data[key]["trial_num(s)"] = trial_nums
 
-        trial_type = data[1]
+        trial_type = str(data[1])
         if trial_type != "": 
             ipr_data[key]["trial_type"] = trial_type
 
-        dec_date = data[2]
+        dec_date = str(data[2])
         if dec_date != "": 
             ipr_data[key]["dec_date"] = dec_date
 
-        FWD = data[3]
+        FWD = str(data[3])
         if FWD != "": 
             ipr_data[key]["FWD?"] = bin_trans[FWD]
 
-        fd_types = data[4]
+        fd_types = str(data[4])
         if fd_types != "": 
             ipr_data[key]["fd_type(s)"] = fd_types
 
-        pat_nums = data[5].split("\n")
+        pat_nums = str(data[5]).split("\n")
         if pat_nums != [""]:
             ipr_data[key]["pat_num(s)"] = pat_nums
 
-        pat_types = data[6].split("\n")
+        pat_types = str(data[6]).split("\n")
         if pat_types != [""]:
             ipr_data[key]["pat_type(s)"] = pat_types
 
-        mult_pat = data[7]
+        mult_pat = str(data[7])
         if mult_pat != "": 
             ipr_data[key]["mult_pat"] = bin_trans[mult_pat]
 
-        pet_names = data[8].split("\n")
+        pet_names = str(data[8]).split("\n")
         if pet_names != [""]:
             ipr_data[key]["pet_name(s)"] = pet_names
 
-        ph_names = data[9].split("\n")
+        ph_names = str(data[9]).split("\n")
         if ph_names != [""]:
             ipr_data[key]["ph_name(s)"] = ph_names
 
-        no_issues = data[10]
+        no_issues = str(data[10])
         if no_issues != "": 
             ipr_data[key]["no_issues"] = bin_trans_rev[no_issues]
 
@@ -233,6 +234,7 @@ def cleanup_text(text_list):
     revise["C0NCLUSION"] = "CONCLUSION"
     revise["C0NCLUSI0N"] = "CONCLUSION"
     revise["CONCLUSI0N"] = "CONCLUSION"
+    revise["0f"] = "of"
     for i in range(0,len(text_list)):
         for entry in revise:
             text_list[i] = text_list[i].replace(entry, revise[entry])
@@ -440,6 +442,9 @@ def order_claim_disposition(order_set, target):
             ordout = ordout.replace(numsep,f1+f2)
         # Replace "—" with "-"
         ordout = ordout.replace("—","-")
+        # Replace "- " and " -" with "-"
+        ordout = ordout.replace("- ","-")
+        ordout = ordout.replace(" -","-")
         return ordout
     # Helper function for finding verb phrases in an order text
     def find_verb(phrase_list):
@@ -503,6 +508,9 @@ def order_claim_disposition(order_set, target):
     verbs[re.compile("has been shown (?!not)", re.IGNORECASE)] = True
     verbs[re.compile("have not been shown", re.IGNORECASE)] = False
     verbs[re.compile("have been shown (?!not)", re.IGNORECASE)] = True
+    verbs[re.compile("have been proven not", re.IGNORECASE)] = False
+    verbs[re.compile("have not been proven", re.IGNORECASE)] = False
+    verbs[re.compile("have been proven (?!not)", re.IGNORECASE)] = True
     verbs[re.compile("is held not", re.IGNORECASE)] = False
     verbs[re.compile("is held (?!not)", re.IGNORECASE)] = True
     verbs[re.compile("are held not", re.IGNORECASE)] = False
@@ -764,14 +772,18 @@ def write_ipr_data2(data_in, keys, keys2, file_out):
             worksheet2.write_string(row,5,data_in[key]["order_txt"],text_format)
         row_old = row
         i = 0
+        print(data_in[key]["pat_num(s)"])
+        print(data_in[key]["order_disp(s)"])
+        print(key)
         for pat_number in data_in[key]["pat_num(s)"]:
             row += 1
             worksheet2.write_string(row,6,pat_number,text_format)
             worksheet2.write_string(row,7,data_in[key]["pat_type(s)"][i],text_format)
-            if data_in[key]["order_disp(s)"][pat_number]["c-range"] is not None:
-                worksheet2.write_string(row,8,"\n".join(data_in[key]["order_disp(s)"][pat_number]["c-range"]),text_format)
-            if data_in[key]["order_disp(s)"][pat_number]["disposition"] is not None:
-                worksheet2.write_string(row,9,"\n".join(data_in[key]["order_disp(s)"][pat_number]["disposition"]),text_format)
+            if pat_number in data_in[key]["order_disp(s)"]:
+                if data_in[key]["order_disp(s)"][pat_number]["c-range"] is not None:
+                    worksheet2.write_string(row,8,"\n".join(data_in[key]["order_disp(s)"][pat_number]["c-range"]),text_format)
+                if data_in[key]["order_disp(s)"][pat_number]["disposition"] is not None:
+                    worksheet2.write_string(row,9,"\n".join(data_in[key]["order_disp(s)"][pat_number]["disposition"]),text_format)
             worksheet2.write_string(row,10,bin_trans_rev[data_in[key]["no_issues2"]],text_format)
             worksheet2.write_string(row,11,bin_trans[data_in[key]["expect_ccd"]],text_format)
             worksheet2.write_string(row,12,bin_trans[data_in[key]["new_page?"]],text_format)
