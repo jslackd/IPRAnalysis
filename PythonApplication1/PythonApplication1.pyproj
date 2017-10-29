@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>15f4b6f8-e5a6-4798-b4e7-24112c60e93a</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>read_ipr_fpage.py</StartupFile>
+    <StartupFile>read_ipr_fwds.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>

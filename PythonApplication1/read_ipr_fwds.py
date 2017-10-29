@@ -71,7 +71,8 @@ def pull_iprdata_ff(file_out, dir, fold):
     file_list = os.listdir(os.path.join(dir,fold))
     for file in file_list:
         if file not in file_list_raw:
-            sys.exit("Error: file source and filenames in ipr_read_data.xlsx MISMATCH")
+            #print("Error: file source and filenames in ipr_read_data.xlsx MISMATCH")
+            pass
 
     # Create a filename entry in ipr_data for each filename and pull data from file
     bin_trans = {"Yes": True, "No": False}
@@ -330,6 +331,9 @@ def order_extract(text_list):
         new_text = new_text.replace("CFR.\n", "C.F.R. ")
         new_text = new_text.replace("C.P.R.\n", "C.F.R. ")
         new_text = new_text.replace("CPR.\n", "C.F.R. ")
+        # handle case of empty string
+        if new_text == "": new_text = " "
+
         if new_text[-1] == ".":
             new_text = new_text + "\n"
         text_list[j] = new_text
@@ -484,13 +488,14 @@ def order_claim_disposition(order_set, target):
     def strip_claim_nums(claimtxt):
         claimtxt = claimtxt.replace(",","")
         claimtxt = claimtxt.replace("and","")
-        claimtxt = claimtxt.replace("  ", " ")
+        #claimtxt = claimtxt.replace("  ", " ")
+        claimtxt = re.sub(" +"," ",claimtxt)
         txtlist = claimtxt.split(" ")
         if txtlist[0].lower() == "claim" or txtlist[0].lower() == "claims":
             txtlist.pop(0)
         numstringlst = []
         for txt in txtlist:
-            if txt[0].isdigit() == True and txt[-1].isdigit() == True:
+            if len(txt) > 0 and txt[0].isdigit() == True and txt[-1].isdigit() == True:
                 numstringlst.append(txt)
             else:
                 break
@@ -521,7 +526,21 @@ def order_claim_disposition(order_set, target):
     verbs[re.compile("is (?!not)", re.IGNORECASE)] = True
     adject = collections.OrderedDict()
     adject[re.compile("unpatentable", re.IGNORECASE)] = False
+    adject[re.compile("not patentable", re.IGNORECASE)] = False
+    adject[re.compile("not unpatentable", re.IGNORECASE)] = True
     adject[re.compile("(?!un)patentable", re.IGNORECASE)] = True
+
+    ###### FINISH THIS ########
+    # Create list of flagged comprehension phrases
+    flagged_phrases = []
+    flagged_phrases.append(re.compile("has not demonstrated", re.IGNORECASE))
+    flagged_phrases.append(re.compile("has not shown", re.IGNORECASE))
+    flagged_phrases.append(re.compile("has not proven", re.IGNORECASE))
+    flagged_phrases.append(re.compile("has failed to show", re.IGNORECASE))
+    flagged_phrases.append(re.compile("has failed to prove", re.IGNORECASE))
+    flagged_phrases.append(re.compile("has failed to demonstrate", re.IGNORECASE))
+    flagged_phrases.append(re.compile("has not carried", re.IGNORECASE))
+    flagged_phrases.append(re.compile("has failed to carry", re.IGNORECASE))
 
     # Initialize the dictionary entries for our results
     dispos = collections.OrderedDict()
@@ -531,22 +550,37 @@ def order_claim_disposition(order_set, target):
     # Loop through order set and extract claim disposition phrases
     cl = re.compile("claim(?=s| |$)",re.IGNORECASE)
     claim_order_ls = []
+    extra_logic_ls = []
     for order in order_set:
         order = cleanup_order(order)
     
         # Find "claim" or "claims"
         cpos = [m.start() for m in re.finditer(cl, order)]
         cstrlist = []
+        extralog = []
         if len(cpos) == 1:
+            flg_phrase = True
+            for intro in flagged_phrases:
+                if len(re.findall(intro, order)) != 0: flg_phrase = False; error_flag = False; break
+            extralog.append(flg_phrase)
             cstrlist.append(order[cpos[0]:])
         elif len(cpos) > 1:
             for j in range(0,len(cpos)):
                 if j != len(cpos) - 1:
+                    flg_phrase = True
+                    for intro in flagged_phrases:
+                        if len(re.findall(intro, order)) != 0: flg_phrase = False; error_flag = False; break
+                    extralog.append(flg_phrase)
                     cstrlist.append(order[cpos[j]:cpos[j+1]])
                 else:
+                    flg_phrase = True
+                    for intro in flagged_phrases:
+                        if len(re.findall(intro, order)) != 0: flg_phrase = False; error_flag = False; break
+                    extralog.append(flg_phrase)
                     cstrlist.append(order[cpos[j]:])
         else:
             continue # no "claims" or "claim"
+        extra_logic_ls.append(extralog)
         claim_order_ls.append(cstrlist)
 
     # If we haven't found any claim language, then return nothing and an error
@@ -558,8 +592,8 @@ def order_claim_disposition(order_set, target):
     print(ipr_data[target]["order_txt"])
     print("")
 
-    for phrase_set in claim_order_ls:
-        for phrase in phrase_set:
+    for phrase_set,logicex_set in zip(claim_order_ls,extra_logic_ls):
+        for phrase,logicex in zip(phrase_set,logicex_set):
 
             print("Mult. Pat:", mult_pat)
 
@@ -587,6 +621,7 @@ def order_claim_disposition(order_set, target):
                 patnum = ipr_data[target]["pat_num(s)"][0]
                 string_of_nums = strip_claim_nums(phrase)
                 logic = (verb_logic == adj_logic)
+                logic = (logic == logicex)
                 if logic == True: logicout = "patentable"
                 else: logicout = "unpatentable"
                 # Save claim dispositions to our temporary dictionary
@@ -630,6 +665,7 @@ def order_claim_disposition(order_set, target):
                 # We have a verb, adjective, and patent, now find claim numbers
                 string_of_nums = strip_claim_nums(phrase)
                 logic = (verb_logic == adj_logic)
+                logic = (logic == logicex)
                 if logic == True: logicout = "patentable"
                 else: logicout = "unpatentable"
                 # Save claim dispositions to our temporary dictionary
@@ -809,7 +845,7 @@ def main():
     subpath = os.path.join(in_dir,fold)
     print_counter = 1
     for target in targets:
-        print(print_counter)
+        print(str(print_counter) + "/" + str(len(targets)))
         print_counter += 1
 
         print(target)
