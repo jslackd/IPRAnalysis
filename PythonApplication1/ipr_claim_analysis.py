@@ -20,14 +20,20 @@ import math
 from datetime import date
 from datetime import datetime
 import urllib, json
+import csv
+import zipfile
+import time
+from shutil import copyfile
 
 in_dir = "in_data"
-#fold = "all_iprs"
-fold = "test_docs2"
+fold = "all_iprs"
+#fold = "test_docs2"
 out_file = "ipr_read_data.xlsx"
 out_file2 = "ipr_read_data+.xlsx"
 out_file3 = "ipr_read_data++.xlsx"
 temp_dir = "C:\\Users\\Johnny\\AppData\\Local\\Temp"
+claim_file = "claim.tsv"
+claimreduc_file = "claim_reduc.csv"
 
 res = 400
 
@@ -60,9 +66,11 @@ iprclaim_data = collections.OrderedDict()
 #       "dec_date(s)"   : ["12/16/2015", "12/21/2015"]
 #       "pat_type"      : "PAT-B2"
 #       "ph_name(s)"    : [["CALIFORNIA INSTITUTE OF TECHNOLOGY", "ACCENTURE, INC"]] 
+#       "app_num"       : "10386691"
 #       "continuation?" : False
 #       "NBER_cats"     : {"cat_id" : "3", "subcat_id" : "32", "cat_name": "Drgs&Med", "subcat_name": "Surgery & Med Inst."}
 #       "num_claims"    : 24
+#       "no_issues3"    : True
 #       "claim_msm?"    : False
 #       "first_claim"   : {"text": "A means for ...", "orig_text": "A means for ..." "cat.": "independent", "root": None, "word_cnt": 45, "word_change": 13}
 #### The following are disposed claims:
@@ -83,8 +91,8 @@ def create_dictionary_entry(fname):
 def create_dictionary_entry2(fname):
     iprclaim_data[fname] = {
         "trial_num(s)": [], "filename(s)" : [], "dec_date(s)": [], "pat_type": None,
-        "ph_name(s)": [], "NBER_cats": {}, "num_claims" : None, "first_claim": {}, 
-        "continuation?": False, "claim_msm?" : False
+        "ph_name(s)": [], "NBER_cats": {}, "num_claims" : None, "first_claim": {"text":None,"orig_text":None,"cat.":"independent","root":None,"word_cnt":None,"word_change":None}, 
+        "continuation?": False, "claim_msm?" : False, "no_issues3": True, "app_num": None
     }
 
 def enter_claim_dict_entries(pat_num, claim_nums, claim_disp, date, existing = None):
@@ -93,20 +101,20 @@ def enter_claim_dict_entries(pat_num, claim_nums, claim_disp, date, existing = N
     # Compile symmetric lists of claims and their dispositions
     n = 0
     for cntxts in claim_nums:
-        for cntxt in cntxts:
-            cntxt = cntxt.replace(" ","")
-            cls = cntxt.split(",")
-            for cl in cls:
-                hypos = cl.find("-")
-                if hypos == -1:
-                    claims.append(cl)
-                    dispos.append(disptxts[n])
-                else:
-                    claims.append(cl[:hypos])
-                    dispos.append(disptxts[n])
-                    claims.append(cl[hypos+1:])
-                    dispos.append(disptxts[n])
+        cntxts = cntxts.replace(" ","")
+        cls = cntxts.split(",")
+        for cl in cls:
+            hypos = cl.find("-")
+            if hypos == -1:
+                claims.append(cl)
+                dispos.append(disptxts[n])
+            else:
+                claims.append(cl[:hypos])
+                dispos.append(disptxts[n])
+                claims.append(cl[hypos+1:])
+                dispos.append(disptxts[n])
         n += 1
+
     if existing is None:
         m = 0
         for claim in claims:
@@ -272,7 +280,9 @@ def transfer_ipr_data(targs):
                 iprclaim_data[pat]["ph_name(s)"].append(ipr_data[targ]["ph_name(s)"])
                 # Create dictionary entries for each claim, and change values
                 date = ipr_data[targ]["dec_date"]
-                enter_claim_dict_entries(pat, dispos[pat]["c-range"], dispos[pat]["disposition"],date)
+                crange_in = dispos[pat]["c-range"]
+                dispo_in = dispos[pat]["disposition"]
+                enter_claim_dict_entries(pat, crange_in, dispo_in,date)
             # We have a repeated patent number; must check value
             else:
                 iprclaim_data[pat]["trial_num(s)"].append(ipr_data[targ]["trial_num(s)"])
@@ -282,20 +292,23 @@ def transfer_ipr_data(targs):
                 # If needed created dictionary entries; if not, we must compare disposition and date
                 existing =  iprclaim_data[pat]
                 date = ipr_data[targ]["dec_date"]
-                enter_claim_dict_entries(pat, dispos[pat]["c-range"], dispos[pat]["disposition"], date, existing)
+                crange_in = dispos[pat]["c-range"]
+                dispo_in = dispos[pat]["disposition"]
+                enter_claim_dict_entries(pat, crange_in, dispo_in, date, existing)
             j+=1
                     
 def patentsview_API_info(pat):
     # Pull patent information from PatentsView API
     if len(pat) == 0: 
-        return {}, None, False
+        return {}, None, None, False
     error_ret = True
     ret1 = "%22patent_num_claims%22"
     ret2 = "%22nber_category_id%22"
     ret3 = "%22nber_subcategory_id%22"
     ret4 = "%22nber_category_title%22"
     ret5 = "%22nber_subcategory_title%22"
-    fquery = ",".join([ret1,ret2,ret3,ret4,ret5])
+    ret6 = "%22app_number%22"
+    fquery = ",".join([ret1,ret2,ret3,ret4,ret5,ret6])
     url_path = "http://www.patentsview.org/api/patents/query?q={%22patent_number%22:%22"+str(pat)+"%22}&f=["+fquery+"]"
     with urllib.request.urlopen(url_path) as url:
         datadown = json.loads(url.read().decode())
@@ -305,18 +318,187 @@ def patentsview_API_info(pat):
         cat_title = datadown["patents"][0]["nbers"][0]["nber_category_title"]
         scat_title = datadown["patents"][0]["nbers"][0]["nber_subcategory_title"]
         num_of_claims = datadown["patents"][0]["patent_num_claims"]
-        if "" in [cat_id, scat_id, cat_title, scat_title, num_of_claims]: error_ret = False
+        app_num = datadown["patents"][0]["applications"][0]["app_number"]
+        if "" in [cat_id, scat_id, cat_title, scat_title, num_of_claims, app_num]: error_ret = False
         nber_data = {"cat_id":cat_id, "subcat_id":scat_id, "cat_name":cat_title, "subcat_name":scat_title}
-    return nber_data, num_of_claims, error_ret
-
-def patentsview_BULK_info(pat):
-    pass
-
-def claim_length_reduction(pat):
-    pass
+    return nber_data, num_of_claims, app_num, error_ret
 
 def continuity_check(pat):
-    pass
+    # This function will download patent archive data, if needed, and check continuity data
+    # Helper function for unziping files
+    def unzip_folder(filenm, pat, appn):
+        zip_ref = zipfile.ZipFile(filenm, 'r')
+        out_folder = os.path.join(in_dir,"patent_data", pat, appn)
+        os.makedirs(out_folder)
+        zip_ref.extractall(out_folder)
+        zip_ref.close()
+
+    ##### Step A: Download application files ######
+    app_num = iprclaim_data[pat]["app_num"]
+    url = "http://storage.googleapis.com/uspto-pair/applications/" + app_num.replace(" ","") + ".zip"
+    file_name = os.path.join(in_dir,"patent_data",pat, app_num + ".zip")
+    missing_list = []
+
+    # If folder for app exists, then skip this application number
+    if os.path.isdir(os.path.join(in_dir,"patent_data",pat, app_num)) == True:
+        pass
+    # Only the zip file exists, so extract it and skip application number
+    elif os.path.isfile(file_name) == True:
+        # Unzip the file and delete the original zip file
+        unzip_folder(file_name, pat, app_num)
+        time.sleep(0.02)
+        os.remove(file_name)
+
+    # Download the file from `url` and save it locally under `file_name`:
+    else:
+        os.makedirs(os.path.join(in_dir,"patent_data",pat))
+        skipper = False
+        try:
+            with urllib.request.urlopen(url) as response, open(file_name, 'wb') as out_file:
+                data = response.read() # a `bytes` object
+                out_file.write(data)
+                out_file.close()               
+        except TimeoutError:
+            if os.path.isfile(file_name) == True:
+                os.remove(file_name)
+            os.makedirs(os.path.join(in_dir,"patent_data",pat,app_num))
+            os.makedirs(os.path.join(in_dir,"patent_data",pat,app_num,app_num))
+            copyfile(os.path.join(in_dir,"patent_data","-continuity_data.tsv"),os.path.join(in_dir,"patent_data",pat,app_num,app_num, "-continuity_data.tsv"))
+            missing_list.append(pat)
+            skipper = True
+            #print("Patent: ",pat)
+            #print("Application: ",app_num)
+            #sys.exit("TimeoutError downloading application data. Try manually downloading the application")
+        except urllib.error.HTTPError:
+            if os.path.isfile(file_name) == True:
+                os.remove(file_name)
+            os.makedirs(os.path.join(in_dir,"patent_data",pat,app_num))
+            os.makedirs(os.path.join(in_dir,"patent_data",pat,app_num,app_num))
+            copyfile(os.path.join(in_dir,"patent_data","-continuity_data.tsv"),os.path.join(in_dir,"patent_data",pat,app_num,app_num, "-continuity_data.tsv"))
+            missing_list.append(pat)
+            skipper = True
+            #print("Patent: ",pat)
+            #print("Application: ",app_num)
+            #sys.exit("HTTPError downloading application data. Try manually downloading the application")
+        # Unzip the file and delete the original zip file
+        if skipper == False:
+            unzip_folder(file_name, pat, app_num)
+            time.sleep(0.02)
+            os.remove(file_name)
+
+    ##### Step B: Analyze application files for continuity data ######
+    cont_pull = False
+    # Check if continuation info csv file
+    path = os.path.join(in_dir,"patent_data", pat, app_num, app_num, app_num+"-continuity_data.tsv")
+    if os.path.exists(path) == True:
+
+        # Analyze the application info csv file
+        with open(path) as tsvfile:
+            reader = csv.DictReader(tsvfile, dialect='excel-tab')
+
+            # Store data in a temporary DICTIONARY
+            for row in reader:
+                keys = list(row.items())
+                cont_DESC = keys[0][1]
+                # "cont_data" : <str>
+                if "this application is a continuation of" in cont_DESC.lower():
+                    cont_pull = True
+                    return cont_pull, missing_list
+                elif "this application is a continuational of" in cont_DESC.lower():
+                    cont_pull = True
+                    return cont_pull, missing_list
+                elif "this application is a continuation in part of" in cont_DESC.lower():
+                    cont_pull = True
+                    return cont_pull, missing_list
+                elif "this application is a divisional of" in cont_DESC.lower():
+                    cont_pull = True
+                    return cont_pull, missing_list
+                elif "this application is a division of" in cont_DESC.lower():
+                    cont_pull = True
+                    return cont_pull, missing_list
+
+    return cont_pull, missing_list
+
+def patentsview_BULK_info(targets):
+    # Will ananlyze Bulk claim PatensView file for info on our patent claims
+    fpath = os.path.join(in_dir,"claim_data",claim_file)
+    sbs1 = re.compile("[a-z]:[a-z]"); sbs2 = re.compile("[a-z];[a-z]"); sbs3 = re.compile("[a-z],[a-z]")
+    clsb1 = re.compile("(?:of|in|from|to) claim [0-9]"); clsb2 = re.compile("(?:of|in|from) claims [0-9]")
+
+    #tot_claims = 0
+    #for targ in targets:
+    #    keyss = iprclaim_data[targ]
+    #    for ky in keyss:
+    #        if ky.isdigit() == True:
+    #           tot_claims += 1 
+    #print(tot_claims)
+
+    with open(fpath, encoding = "utf8", errors = "ignore") as tsvfile:
+        tsvreader = csv.reader(tsvfile, delimiter="\t", )
+        count = 0
+        for line in tsvreader:
+            # This line contains info on one of our patent claims
+            if line[1] in targets and line[4] in iprclaim_data[line[1]]:
+                # Clenup the text line for a more accurate word count
+                textin = line[2]
+                textin = textin.replace("  ", " ")
+                textin = textin.replace("\n", " ")
+                found1 = re.findall(sbs1,textin); found2 = re.findall(sbs2,textin); found3 = re.findall(sbs3,textin)
+                for f1 in found1:
+                    textin = textin.replace(f1,f1[0:2] + " " + f1[2])
+                for f2 in found2:
+                    textin = textin.replace(f2,f2[0:2] + " " + f2[2])
+                for f3 in found3:
+                    textin = textin.replace(f3,f3[0:2] + " " + f3[2])
+
+                iprclaim_data[line[1]][line[4]]["text"] = textin
+                clref1 = re.findall(clsb1,textin); clref2 = re.findall(clsb2,textin)
+                if line[3] == "" and len(clref1) == 0 and len(clref2) == 0: 
+                    deper = "independent"; root = None
+                else: deper = "dependent"; root = line[3]
+                iprclaim_data[line[1]][line[4]]["cat."] = deper
+                iprclaim_data[line[1]][line[4]]["root"] = root
+                iprclaim_data[line[1]][line[4]]["word_cnt"] = len(textin.split(" "))
+
+                # If we are on the first claim, set first_claim values
+                if line[4] == "1":
+                    iprclaim_data[line[1]]["first_claim"]["text"] = textin
+                    iprclaim_data[line[1]]["first_claim"]["cat."] = deper
+                    iprclaim_data[line[1]]["first_claim"]["root"] = root
+                    iprclaim_data[line[1]]["first_claim"]["word_cnt"] = len(textin.split(" "))
+
+                #tot_claims -= 1
+                print(count)
+                #print(tot_claims)
+                #print(textin)
+                #print(len(textin.split(" ")))
+                #print(deper)
+                #print(root)
+                #print("")
+
+            count += 1
+
+def claim_length_reduction_KUHN(targets):
+    # Will ananlyze John Kuhn's claim reduction file for info on our patent claims
+    fpath = os.path.join(in_dir,"claim_data",claimreduc_file)
+
+    #tot_pats = len(targets)
+
+    with open(fpath, encoding = "utf8") as tsvfile:
+        tsvreader = csv.reader(tsvfile, delimiter=",")
+        count = 0
+        for line in tsvreader:
+            # This line contains info on one of our patents
+            if line[0] in targets:
+                iprclaim_data[line[0]]["first_claim"]["word_change"] = int(line[2]) - int(line[1])
+
+                #tot_pats -= 1
+                #print(count)
+                #print(tot_pats)
+                #print(int(line[2]) - int(line[1]))
+                #print("")
+
+            count += 1
 
 def pat_type_check(list_of_nums):
     # Helper function for screening out list of patents with PAT and not RE, D, etc.
@@ -325,7 +507,6 @@ def pat_type_check(list_of_nums):
         if typef != "PAT": return False
     return True
 
-## NOT DONE #####
 def write_ipr_data(data_in, data_in2, keys, keysnew, keys2, file_out):
     # Delete existing file if it exists
     if os.path.isfile(file_out) == True:
@@ -477,7 +658,133 @@ def write_ipr_data(data_in, data_in2, keys, keysnew, keys2, file_out):
         row +=1
 
     # Open a workbook and our first worksheet for prior data
-    worksheet2 = workbook.add_worksheet(name = "IPR Claim Data")
+    worksheet3 = workbook.add_worksheet(name = "IPR Claim Data")
+    worksheet3.set_column(0,0,10)
+    worksheet3.set_column(1,1,40)
+    worksheet3.set_column(2,2,12)
+    worksheet3.set_column(3,3,8)
+    worksheet3.set_column(4,4,10)
+    worksheet3.set_column(5,7,8)
+    worksheet3.set_column(8,8,15)
+    worksheet3.set_column(9,9,30)
+    worksheet3.set_column(10,12,8)
+    worksheet3.set_column(13,15,15)
+    worksheet3.set_column(16,16,20)
+
+    # Write headers for our second worksheet:
+    worksheet3.write('A1', 'Patent No.', header_format)
+    worksheet3.write('B1', 'Trial Patent Holder Name(s)', header_format)
+    worksheet3.write('C1', 'Application No.', header_format)
+    worksheet3.write('D1', 'Continuation?', header_format)
+    worksheet3.write('E1', 'Patent Type', header_format)  
+    worksheet3.write('F1', 'No. of Claims', header_format) 
+    worksheet3.write('G1', 'Patent Issues?', header_format)
+    worksheet3.write('H1', 'Claim Issues?', header_format)
+    worksheet3.write('I1', 'NBER Category', header_format)  
+    worksheet3.write('J1', 'NBER Subcategory', header_format)
+    worksheet3.write('K1', 'Claim No.', header_format)
+    worksheet3.write('L1', 'Word Count', header_format)
+    worksheet3.write('M1', 'Word Reduc.', header_format)
+    worksheet3.write('N1', 'Dependence', header_format)
+    worksheet3.write('O1', 'Disposition', header_format)
+    worksheet3.write('P1', 'Disp. Date', header_format)
+    worksheet3.write('Q1', 'Filename(s)', header_format)
+
+    # Write in data for each ipr patent on our third worksheet:
+    row = 1
+    for key in keysnew:
+        worksheet3.write_string(row,0,key,text_format)
+        if data_in2[key]["ph_name(s)"] is not None:
+            worksheet3.write_string(row,1,"\n".join(";".join(sl) for sl in data_in2[key]["ph_name(s)"]),text_format_sm)
+        if data_in2[key]["app_num"] is not None:
+            worksheet3.write_string(row,2,data_in2[key]["app_num"],text_format)
+        if data_in2[key]["continuation?"] is not None:
+            worksheet3.write_string(row,3,bin_trans[data_in2[key]["continuation?"]],text_format)
+        if data_in2[key]["pat_type"] is not None:
+            worksheet3.write_string(row,4,data_in2[key]["pat_type"],text_format)
+        if data_in2[key]["num_claims"] is not None:
+            worksheet3.write_string(row,5,data_in2[key]["num_claims"],text_format)
+        if data_in2[key]["no_issues3"] is not None:
+            worksheet3.write_string(row,6,bin_trans_rev[data_in2[key]["no_issues3"]],text_format)
+        if data_in2[key]["claim_msm?"] is not None:
+            worksheet3.write_string(row,7,bin_trans[data_in2[key]["claim_msm?"]],text_format)
+        if data_in2[key]["NBER_cats"]["cat_name"] is not None:
+            worksheet3.write_string(row,8,data_in2[key]["NBER_cats"]["cat_name"],text_format)
+        if data_in2[key]["NBER_cats"]["subcat_name"] is not None:
+            worksheet3.write_string(row,9,data_in2[key]["NBER_cats"]["subcat_name"],text_format)
+
+        row_old = row
+
+        # First, compile list of claim numbers
+        clist = []
+        for keysub in data_in2[key]:
+            if keysub.isdigit() == True: clist.append(keysub)
+
+        # Print out first_claim information
+        row += 1
+        if data_in2[key]["ph_name(s)"] is not None:
+            worksheet3.write_string(row,1,"\n".join(";".join(sl) for sl in data_in2[key]["ph_name(s)"]),text_format_sm)
+        if data_in2[key]["app_num"] is not None:
+            worksheet3.write_string(row,2,data_in2[key]["app_num"],text_format)
+        if data_in2[key]["continuation?"] is not None:
+            worksheet3.write_string(row,3,bin_trans[data_in2[key]["continuation?"]],text_format)
+        if data_in2[key]["pat_type"] is not None:
+            worksheet3.write_string(row,4,data_in2[key]["pat_type"],text_format)
+        if data_in2[key]["num_claims"] is not None:
+            worksheet3.write_string(row,5,data_in2[key]["num_claims"],text_format)
+        if data_in2[key]["no_issues3"] is not None:
+            worksheet3.write_string(row,6,bin_trans_rev[data_in2[key]["no_issues3"]],text_format)
+        if data_in2[key]["claim_msm?"] is not None:
+            worksheet3.write_string(row,7,bin_trans[data_in2[key]["claim_msm?"]],text_format)
+        if data_in2[key]["NBER_cats"]["cat_name"] is not None:
+            worksheet3.write_string(row,8,data_in2[key]["NBER_cats"]["cat_name"],text_format)
+        if data_in2[key]["NBER_cats"]["subcat_name"] is not None:
+            worksheet3.write_string(row,9,data_in2[key]["NBER_cats"]["subcat_name"],text_format)
+        worksheet3.write_string(row,10,"first claim",text_format)
+        if data_in2[key]["first_claim"]["word_cnt"] is not None:
+            worksheet3.write_string(row,11,str(data_in2[key]["first_claim"]["word_cnt"]),text_format)   
+        if data_in2[key]["first_claim"]["word_change"] is not None:
+            worksheet3.write_string(row,13,str(data_in2[key]["first_claim"]["word_change"]),text_format)  
+        if data_in2[key]["first_claim"]["cat."] is not None:
+            worksheet3.write_string(row,13,data_in2[key]["first_claim"]["cat."],text_format)  
+        worksheet3.write_string(row,14,"-",text_format) 
+        worksheet3.write_string(row,15,"-",text_format)
+
+        # Print out information for the rest of the claims
+        for claim_number in clist:
+            row += 1
+            if data_in2[key]["ph_name(s)"] is not None:
+                worksheet3.write_string(row,1,"\n".join(";".join(sl) for sl in data_in2[key]["ph_name(s)"]),text_format_sm)
+            if data_in2[key]["app_num"] is not None:
+                worksheet3.write_string(row,2,data_in2[key]["app_num"],text_format)
+            if data_in2[key]["continuation?"] is not None:
+                worksheet3.write_string(row,3,bin_trans[data_in2[key]["continuation?"]],text_format)
+            if data_in2[key]["pat_type"] is not None:
+                worksheet3.write_string(row,4,data_in2[key]["pat_type"],text_format)
+            if data_in2[key]["num_claims"] is not None:
+                worksheet3.write_string(row,5,data_in2[key]["num_claims"],text_format)
+            if data_in2[key]["no_issues3"] is not None:
+                worksheet3.write_string(row,6,bin_trans_rev[data_in2[key]["no_issues3"]],text_format)
+            if data_in2[key]["claim_msm?"] is not None:
+                worksheet3.write_string(row,7,bin_trans[data_in2[key]["claim_msm?"]],text_format)
+            if data_in2[key]["NBER_cats"]["cat_name"] is not None:
+                worksheet3.write_string(row,8,data_in2[key]["NBER_cats"]["cat_name"],text_format)
+            if data_in2[key]["NBER_cats"]["subcat_name"] is not None:
+                worksheet3.write_string(row,9,data_in2[key]["NBER_cats"]["subcat_name"],text_format)
+            worksheet3.write_string(row,10,claim_number,text_format)
+            if data_in2[key][claim_number]["word_cnt"] is not None:
+                worksheet3.write_string(row,11,str(data_in2[key][claim_number]["word_cnt"]),text_format)       
+            worksheet3.write_string(row,12,"-",text_format)        
+            if data_in2[key][claim_number]["cat."] is not None:
+                worksheet3.write_string(row,13,data_in2[key][claim_number]["cat."],text_format)   
+            if data_in2[key][claim_number]["dispo"] is not None:
+                print(data_in2[key][claim_number]["dispo"])
+                worksheet3.write_string(row,14,data_in2[key][claim_number]["dispo"],text_format) 
+            if data_in2[key][claim_number]["date"] is not None:
+                worksheet3.write_string(row,15,data_in2[key][claim_number]["date"],text_format)
+
+        worksheet3.write_string(row_old,16,"\n".join(data_in2[key]["filename(s)"]),text_format_sm)
+        row +=1
 
     workbook.close()
 
@@ -494,26 +801,40 @@ def main():
     tg_old = tad.keys()
     transfer_ipr_data(tg_old)
 
-    target_pats = iprclaim_data.keys()
+    # Analyze Patent and Claim Information
+    target_pats = iprclaim_data.keys(); err_downs = []
     for target_pat in target_pats:
         # Step 3: Pull NBER category and subcategories, and number of claims from PatentsView
-        NBER_cat, num_of_claims, error_free = patentsview_API_info(target_pat)
+        NBER_cat, num_of_claims, app_num, error_free = patentsview_API_info(target_pat)
+        iprclaim_data[target_pat]["NBER_cats"] = NBER_cat
+        iprclaim_data[target_pat]["num_claims"] = num_of_claims
+        iprclaim_data[target_pat]["app_num"] = app_num
+        iprclaim_data[target_pat]["no_issues3"] = bool(iprclaim_data[target_pat]["no_issues3"] * error_free)
 
-        #print(target_pat)
+        print(target_pat)
         #print(NBER_cat)
         #print(num_of_claims)
         #if error_free == False: print("------ERROR------")
-
-        # Step 4: Pull claim text and information from PatensView bulk data file
-        claim_msm, error_free = patentsview_BULK_info(target)
-
-        ## Step 5: Pull first claim length reduction from John Kuhn data set
-        #error_free = claim_length_reduction(target)
  
-        ## Step 6: Look up continuity data for each targeted patent (download from google archives)
-        #cont_flag = continuity_check(target)
+        # Step 4: Look up continuity data for each targeted patent (possible download from google archives)
+        cont_flag, err_list = continuity_check(target_pat)
+        iprclaim_data[target_pat]["continuation?"] = cont_flag
+        err_downs.extend(err_list)
+        
+        #print(cont_flag)
 
-    breaking = 1
+    # Stop execution if we don't have complete continuity data files
+    if len(err_downs) != 0:
+        sys.exit("There are missing application continuity data files")
+        for err in err_downs:
+            print(err)
+
+    # Step 5: Pull claim text and information from PatensView bulk data file
+    patentsview_BULK_info(target_pats)
+
+    # Step 6: Pull first claim length reduction from John Kuhn data set
+    error_free = claim_length_reduction_KUHN(target_pats)
+
     # Step 7: Write all of our data to the output file
     write_ipr_data(ipr_data, iprclaim_data, ipr_data.keys(), iprclaim_data.keys(), tg_old, out_file3)
 

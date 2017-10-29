@@ -18,8 +18,8 @@ from multiprocessing.dummy import Pool as ThreadPool
 from difflib import SequenceMatcher
 
 in_dir = "in_data"
-#fold = "all_iprs"
-fold = "test_docs2"
+fold = "all_iprs"
+#fold = "test_docs2"
 out_file = "ipr_read_data.xlsx"
 out_file2 = "ipr_read_data+.xlsx"
 temp_dir = "C:\\Users\\Johnny\\AppData\\Local\\Temp"

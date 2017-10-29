@@ -16,8 +16,8 @@ import itertools
 import xlsxwriter
 
 in_dir = "in_data"
-#fold = "all_iprs"
-fold = "test_docs"
+fold = "all_iprs"
+#fold = "test_docs"
 out_file = "ipr_read_data.xlsx"
 temp_dir = "C:\\Users\\Johnny\\AppData\\Local\\Temp"
 
